@@ -5,7 +5,8 @@ import re
 from .common import integer, keys, name, relative, require
 
 TARGET = "aarch64-apple-darwin"
-MAX_EXPLICIT_SEEDS = 32768
+MAX_JOB_BYTES = 32 * 1024 * 1024
+MAX_EXPLICIT_SEEDS = 1048576
 MAX_RANGE_SEEDS = 1048576
 
 
@@ -13,7 +14,7 @@ def seed_request(value, *, allow_range=True):
     """Validate the compact job description without allocating an expanded range."""
     require(isinstance(value, dict), "matching request must be an object")
     if "seed_range" in value:
-        require(allow_range, "seed_range is supported only by JSONL compare steps")
+        require(allow_range, "seed_range requires a structured compare or train step")
         keys(value, ("seed_range",))
         item = value["seed_range"]
         keys(item, ("start", "count"))
@@ -154,6 +155,21 @@ def validate_job(job):
                 require(isinstance(step["ready"]["field"], str), "invalid readiness field")
                 require(isinstance(step["ready"]["equals"], (str, int, bool)), "invalid readiness value")
             output(step["output"])
+        elif op == "train":
+            keys(step, (*base, "command", "requests", "output"), ("ready",))
+            command(step["command"])
+            require(step["command"]["stdin"] == "", "train supplies stdin")
+            require(isinstance(step["requests"], list) and 1 <= len(step["requests"]) <= 100, "expected 1..100 training requests")
+            for request in step["requests"]:
+                seed_request(request)
+            if "ready" in step:
+                keys(step["ready"], ("field", "equals"))
+                require(isinstance(step["ready"]["field"], str), "invalid readiness field")
+            output(step["output"])
+        elif op == "pgo_import":
+            keys(step, (*base, "source", "sha256"))
+            require(step["source"] == f"work/checkouts/candidate/pgo/seed-seeker-{TARGET}.profdata", "only the checked-in target profile may be imported")
+            require(isinstance(step["sha256"], str) and re.fullmatch(r"[a-f0-9]{64}", step["sha256"]), "profile requires exact SHA-256")
         elif op == "pgo_merge":
             keys(step, (*base, "raw_dir", "output"))
             require(step["raw_dir"] == "work/pgo/raw" and step["output"] == "work/pgo/merged.profdata",
@@ -167,5 +183,5 @@ def validate_job(job):
             require(step.get("template", "Time Profiler") in ("Time Profiler", "CPU Profiler"), "invalid trace template")
         else:
             require(False, f"unknown operation: {op}")
-    require(len(json.dumps(job).encode()) <= 1024 * 1024, "job exceeds 1 MiB")
+    require(len(json.dumps(job).encode()) <= MAX_JOB_BYTES, "job exceeds 32 MiB")
     return job

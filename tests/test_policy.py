@@ -17,7 +17,7 @@ class PolicyTests(unittest.TestCase):
                         {'seed_range': {'start': 2**64-MAX_RANGE_SEEDS, 'count': MAX_RANGE_SEEDS}}):
             job = benchmark('seedfinder', 'a'*40, 'b'*40, query={}, **request)
             self.policy.validate(job)
-            self.assertLess(len(json.dumps(job).encode()), 1024**2)
+            self.assertLess(len(json.dumps(job).encode()), 32 * 1024**2)
         self.assertEqual({'seeds': [123, 124, 125]}, expand_seed_request({'seed_range': {'start': 123, 'count': 3}}))
         invalid = [{'seeds': []}, {'seeds': [0] * (MAX_EXPLICIT_SEEDS+1)}, {'seeds': [True]},
                    {'seed_range': {'start': 0, 'count': 0}}, {'seed_range': {'start': 0, 'count': True}},
@@ -40,6 +40,34 @@ class PolicyTests(unittest.TestCase):
         self.policy.validate(correctness("seedfinder", "a" * 40, "test::needle"))
         self.policy.validate(pgo("seedfinder", "a" * 40, query={}, seeds=[1, 2]))
         self.policy.validate(benchmark("seedfinder", "a" * 40, "b" * 40, query={}, seeds=[1], profiling=True))
+        checked = pgo('seedfinder', 'a'*40, query={}, seed_range={'start': 1000, 'count': 4096}, baseline_profile_sha256='b'*64)
+        self.policy.validate(checked)
+        builds = [s['command'] for s in checked['steps'] if s['op'] == 'exec' and s['command']['argv'][0] == 'cargo']
+        self.assertEqual({'work/checkouts/candidate'}, {c['cwd'] for c in builds})
+        self.assertEqual(3, len({c['env']['CARGO_TARGET_DIR'] for c in builds}))
+
+    def test_profiling_build_does_not_enable_profilers(self):
+        policy = Policy({**self.policy.config, 'capabilities': ['cargo', 'benchmark', 'inspect', 'profiling-build']})
+        spec = benchmark('seedfinder', 'a'*40, 'b'*40, query={}, seeds=[1], profiling=True)
+        policy.validate(spec)
+        for tool in ('sample', 'xctrace'):
+            cmd = command(['${JOB}/artifacts/frozen/candidate/seed-seeker', '--benchmark', '1000', '--workers', '1'], env={})
+            spec['steps'] = [{'id': 'profile', 'op': 'profile', 'tool': tool, 'command': cmd,
+                              'duration_seconds': 1, 'output': 'artifacts/profile.out'}]
+            with self.assertRaisesRegex(Invalid, 'capability disabled locally: ' + tool):
+                policy.validate(spec)
+
+    def test_pgo_training_and_import_are_narrowly_scoped(self):
+        spec = pgo('seedfinder', 'a'*40, query={}, seeds=[1], baseline_profile_sha256='b'*64)
+        for key, value in (('source', 'work/checkouts/candidate/other.profdata'), ('sha256', 'x'*64)):
+            changed = copy.deepcopy(spec)
+            changed['steps'][0][key] = value
+            with self.assertRaises(Invalid):
+                self.policy.validate(changed)
+        train = next(s for s in spec['steps'] if s['op'] == 'train')
+        train['command']['argv'][2] = '8'
+        with self.assertRaisesRegex(Invalid, 'one worker'):
+            self.policy.validate(spec)
 
     def test_command_and_environment_escapes_are_rejected(self):
         attacks = [

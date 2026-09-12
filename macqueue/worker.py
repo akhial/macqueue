@@ -13,7 +13,7 @@ from pathlib import Path
 from .client import Client, RemoteError
 from .common import Invalid, integer, json_bytes, keys, name, private_write, read_secret, require
 from .policy import Policy
-from .process import CleanupError
+from .process import DEFAULT_MAX_OUTPUT_BYTES, CleanupError
 from .runner import Runner, pack_artifacts
 
 LOG = logging.getLogger("macqueue")
@@ -40,7 +40,7 @@ def load_config(path, *, check_account=True):
         name(project)
         require(isinstance(mirror, str) and Path(mirror).is_absolute() and Path(mirror).is_dir(), "mirror must be an existing absolute directory")
         config["projects"][project] = str(Path(mirror).resolve())
-    for key, default, low, high in (("max_output_bytes", 32 * 1024**2, 1024, 512 * 1024**2),
+    for key, default, low, high in (("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES, 1024, 512 * 1024**2),
                                   ("max_artifact_bytes", 512 * 1024**2, 1024, 2 * 1024**3),
                                   ("max_job_bytes", 20 * 1024**3, 1024**2, 1024**4),
                                   ("min_free_bytes", 5 * 1024**3, 0, 1024**4),

@@ -57,11 +57,21 @@ def correctness(project, commit, test_filter=None):
                          "steps": [{"id": name, "op": "exec", "command": command(argv, log=name)} for name, argv in argv_sets]})
 
 
-def pgo(project, commit, *, query, seeds, seed_count=100000, warmups=2, samples=10):
-    """Train a separate instrumented executable, then compare ordinary vs PGO builds."""
-    spec = benchmark(project, commit, commit, query=query, seeds=seeds, seed_count=seed_count, warmups=warmups, samples=samples)
+def pgo(project, commit, *, query, seeds=None, seed_range=None, seed_count=100000, warmups=2, samples=10,
+        baseline_profile_sha256=None):
+    """Compare ordinary or pinned checked-in PGO with a freshly trained build."""
+    spec = benchmark(project, commit, commit, query=query, seeds=seeds, seed_range=seed_range,
+                     seed_count=seed_count, warmups=warmups, samples=samples)
     spec["label"] = "PGO training and comparison"
-    steps = build_steps("baseline")
+    steps = []
+    warnings = " -Cllvm-args=-pgo-warn-missing-function"
+    if baseline_profile_sha256:
+        steps.append({"id": "import-checked-profile", "op": "pgo_import",
+                      "source": "work/checkouts/candidate/pgo/seed-seeker-aarch64-apple-darwin.profdata",
+                      "sha256": baseline_profile_sha256})
+    steps.extend(build_steps("baseline", flags="-Cprofile-use=${JOB}/work/pgo/checked.profdata" + warnings if baseline_profile_sha256 else ""))
+    # All three builds use the identical source path as well as target/package set.
+    next(step for step in steps if step["id"] == "build-baseline")["command"]["cwd"] = "work/checkouts/candidate"
     training = build_steps("training", flags="-Cprofile-generate=${JOB}/work/pgo/raw")
     # Compile training and optimized code from the same source path so Rust's
     # crate identity and LLVM profile names remain stable across the two builds.
@@ -69,11 +79,15 @@ def pgo(project, commit, *, query, seeds, seed_count=100000, warmups=2, samples=
     steps.extend(training)
     argv = ["${JOB}/artifacts/frozen/training/match_benchmark", json.dumps(query, separators=(",", ":")), "1"]
     train = command(argv, "candidate", timeout=600, log="pgo-training", env={"LLVM_PROFILE_FILE": "${JOB}/work/pgo/raw/%m-%p.profraw"})
-    train["stdin"] = json.dumps({"seeds": seeds}, separators=(",", ":")) + "\n"
-    steps.append({"id": "train", "op": "exec", "command": train})
+    cli_train = command(["${JOB}/artifacts/frozen/training/seed-seeker", "--benchmark", str(seed_count), "--workers", "1"],
+                        "candidate", timeout=600, log="pgo-cli-training", env=train["env"])
+    steps.append({"id": "train-cli", "op": "exec", "command": cli_train})
+    steps.append({"id": "train", "op": "train", "command": train,
+                  "requests": spec["steps"][-1]["requests"], "output": "artifacts/pgo/training.jsonl"})
     steps.append({"id": "merge", "op": "pgo_merge", "raw_dir": "work/pgo/raw", "output": "work/pgo/merged.profdata"})
     steps.append({"id": "preserve-profile", "op": "copy", "source": "work/pgo/merged.profdata", "destination": "artifacts/pgo/merged.profdata"})
-    steps.extend(build_steps("candidate", flags="-Cprofile-use=${JOB}/work/pgo/merged.profdata"))
+    steps.append({"id": "preserve-raw", "op": "copy", "source": "work/pgo/raw", "destination": "artifacts/pgo/raw"})
+    steps.extend(build_steps("candidate", flags="-Cprofile-use=${JOB}/work/pgo/merged.profdata" + warnings))
     steps.extend(spec["steps"][-2:])
     spec["steps"] = steps
     return validate_job(spec)

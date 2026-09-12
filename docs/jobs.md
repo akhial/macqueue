@@ -65,7 +65,7 @@ ${JOB}/artifacts/frozen/VARIANT/match_benchmark QUERY_JSON WORKERS
 ${JOB}/artifacts/frozen/VARIANT/equivalence
 ```
 
-`equivalence` is available only with the local profiling capability and uses its default invocation. The query argument is a JSON object; its domain schema belongs to the benchmark. `match_benchmark` stdin contains JSON-lines seed requests, each with at most 32,768 unsigned 64-bit seeds, subject to the 64 KiB total exec stdin limit. The generic exec operation sends stdin and closes it, preserving all output.
+`equivalence` is available only with the local `profiling-build` capability and uses its default invocation. The query argument is a JSON object; its domain schema belongs to the benchmark. `match_benchmark` stdin contains JSON-lines seed requests, each with at most 1,048,576 unsigned 64-bit seeds, subject to the 64 KiB total exec stdin limit. The generic exec operation sends stdin and closes it, preserving all output.
 
 Set `"wrappers":["time","caffeinate"]` in a command to wrap it with `/usr/bin/time -l` and `caffeinate -i`, in the listed outer-to-inner order. Their output is captured with the command. The worker's timeout and process-group cleanup apply to wrappers too.
 
@@ -77,11 +77,11 @@ Use `"worker_counts":[1,"performance","available"]`. Counts are resolved with `h
 
 `process` mode runs a fresh `seed-seeker` per warmup/sample. `jsonl` mode starts one `match_benchmark` process per variant per worker count, consumes each readiness record, and keeps the sessions alive through warmups and samples. Both processes may be alive but only one request is outstanding. After every request completes, execution moves to the other variant. Sample pairs alternate AB, BA, AB, BA. Requests are replayed identically to both variants, and warmup records remain marked separately.
 
-Matching comparisons accept `{"seeds":[123,456]}` (up to 32,768 IDs) or `{"seed_range":{"start":1000000,"count":65536}}` (up to 1,048,576 consecutive uint64 IDs without overflow). The worker expands a range into an ordinary `seeds` array once per pair, before timing, and sends that identical array as one request to both executables. Existing adapters need no changes. Results retain the compact descriptor. The 1 MiB job/API limit remains in place.
+Matching comparisons accept `{"seeds":[123,456]}` (up to 1,048,576 IDs) or `{"seed_range":{"start":1000000,"count":65536}}` (up to 1,048,576 consecutive uint64 IDs without overflow). The worker expands a range into an ordinary `seeds` array once per pair, before timing, and sends that identical array as one request to both executables. Existing adapters need no changes. Results retain the compact descriptor. The total job/API limit is 32 MiB, including every explicit seed list in the job. Compact ranges avoid large submissions.
 
 Generate a range with `macqueue plan benchmark … --seed-range 1000000:65536`, or supply a JSON array with `--seeds-file seeds.json`. These control matching requests; `--seed-count` controls the CLI benchmark. With 256-seed work chunks, 65,536 seeds provide 256 chunks. Choose the query/count using a pilot so each sample lasts long enough to measure; the upper bound is not a recommended workload size.
 
-A JSONL record may be up to 32 MiB, bounded further by the operator's total process output limit (32 MiB by default, including stderr and every warmup/sample). Dense matches can hit that budget; output is never silently truncated in artifacts. Use the adapter's `response.seconds` for search timing in Seed Seeker, and check `tested` and full match results before accepting measurements.
+A JSONL record may be up to 64 MiB, bounded further by the operator's total process output limit (256 MiB by default, including stderr and every warmup/sample). Dense matches can hit that budget; output is never silently truncated in artifacts. Use the adapter's `response.seconds` for search timing in Seed Seeker, and check `tested` and full match results before accepting measurements.
 
 For strict readiness validation, add:
 
@@ -117,7 +117,7 @@ Reserved worker records cannot be caller output destinations. Executed code can 
 
 ## Optional profiling
 
-Add `profiling` to the Mac's local `capabilities`. This build shape is then allowed:
+Add `profiling-build` to the Mac's local `capabilities` for builds and symbols. Enable `sample` and `xctrace` separately after testing them under the execution account. Existing configurations using `profiling` retain the older behavior of enabling all three. This build shape is allowed by `profiling-build`:
 
 ```sh
 cargo build --locked --offline --profile profiling \
@@ -126,7 +126,7 @@ cargo build --locked --offline --profile profiling \
   --bin seed-seeker --example match_benchmark --example equivalence
 ```
 
-`exec` also accepts `xcrun xctrace list templates` and these export shapes:
+With the separate `xctrace` capability, `exec` also accepts `xcrun xctrace list templates` and these export shapes:
 
 ```text
 xcrun xctrace export --input ${JOB}/artifacts/profile.trace --output ${JOB}/artifacts/toc.xml --toc
@@ -168,7 +168,10 @@ Add `pgo` to local capabilities and provision `llvm-tools-preview` in the exact 
 ```text
 -Cprofile-generate=${JOB}/work/pgo/raw
 -Cprofile-use=${JOB}/work/pgo/merged.profdata
+-Cprofile-use=${JOB}/work/pgo/checked.profdata
 ```
+
+Either profile-use value may have exactly ` -Cllvm-args=-pgo-warn-missing-function` appended. Generated PGO plans enable these diagnostics to expose missing profile identities in the build logs; arbitrary LLVM arguments remain disallowed.
 
 Generation also requires `LLVM_PROFILE_FILE=${JOB}/work/pgo/raw/%m-%p.profraw`. Supply the same LLVM variable when running instrumented training binaries. Let them exit cleanly so LLVM can flush profiles. The worker closes persistent session stdin and waits for successful termination at the end of comparison.
 
@@ -176,4 +179,9 @@ Generation also requires `LLVM_PROFILE_FILE=${JOB}/work/pgo/raw/%m-%p.profraw`. 
 {"id":"merge","op":"pgo_merge","raw_dir":"work/pgo/raw","output":"work/pgo/merged.profdata"}
 ```
 
-This uses `RUST_TOOLCHAIN/lib/rustlib/aarch64-apple-darwin/bin/llvm-profdata merge -o …` over 1–4,096 job-owned `.profraw` files. It records the LLVM tool version. It never resolves a random system LLVM installation. Use separate target directories for ordinary, training, and PGO builds; the generated plan does this. Copy raw/merged profiles to ordinary artifacts if you want them uploaded; the generated PGO plan preserves the merged profile.
+This uses `RUST_TOOLCHAIN/lib/rustlib/aarch64-apple-darwin/bin/llvm-profdata merge -o …` over 1–4,096 job-owned `.profraw` files. It requires the LLVM major/minor/patch version to match `rustc -Vv`, records both versions, and preserves a function/counter report. It never resolves a random system LLVM installation. Use separate target directories for ordinary, training, and PGO builds; the generated plan does this. Copy raw/merged profiles to ordinary artifacts if you want them uploaded; the generated PGO plan preserves the merged profile.
+
+
+`plan pgo` trains both the CLI benchmark and the matching adapter with one worker, merges only their job-owned raw profiles, then compares the optimized candidate against the baseline at the selected worker counts. All three Cargo builds use the same candidate checkout, target, package set, and separate target directories. Raw profiles, the merged profile, training responses, build diagnostics, and frozen binary identities are preserved. Repeated `train` steps with distinct IDs/log paths and different approved query objects can cover additional matching workloads before merge. A `train` step contains `command`, `requests`, `output`, and optional `ready`; it accepts the same compact seed ranges as comparisons, requires the frozen training adapter, and validates EOF output strictly.
+
+By default the PGO baseline uses empty `RUSTFLAGS`. To compare against the project's checked-in target profile, calculate its SHA-256 and pass `--baseline-profile-sha256 HASH` to `plan pgo`. This adds a `pgo_import` step for exactly `work/checkouts/candidate/pgo/seed-seeker-aarch64-apple-darwin.profdata`. The worker verifies the hash, checks readability with matching LLVM, copies it to `work/pgo/checked.profdata`, and preserves it as an artifact. It does not overwrite source profiles. A readable profile can still be stale: inspect the baseline and candidate missing-function warnings and fresh counter report before claiming deployment benefit. The plan retains Macqueue's specified Cargo binary/example build shape; the native release packaging script may select additional outputs. Treat any performance result as evidence for the recorded build, and verify the final packaging build separately.

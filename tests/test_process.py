@@ -40,6 +40,15 @@ class ProcessTests(unittest.TestCase):
             self.assertEqual({'b': 2}, process.record(2))
             process.finish_session()
 
+    def test_large_records_and_cumulative_output_above_old_limits(self):
+        code = "import sys,json; print('{}');\nfor line in sys.stdin: print(json.dumps({'matches':'x'*(33*1024*1024)}))"
+        with self.process(code, timeout=30, limit=256*1024**2) as process:
+            process.keep_lines = True
+            process.record(2)
+            for _ in range(2):
+                self.assertEqual(33*1024**2, len(process.request({'seeds': [1]}, 15)['response']['matches']))
+            process.finish_session()
+
     def test_oversized_record_is_rejected_below_total_output_limit(self):
         with self.process("print('{\"a\":12}')", max_record_bytes=7) as process:
             process.keep_lines = True

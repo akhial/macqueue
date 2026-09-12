@@ -17,7 +17,7 @@ class Policy:
     def __init__(self, config):
         self.config = config
         self.capabilities = set(config.get("capabilities", ["cargo", "benchmark", "inspect"]))
-        require(self.capabilities <= {"cargo", "benchmark", "inspect", "profiling", "pgo"}, "unknown capability")
+        require(self.capabilities <= {"cargo", "benchmark", "inspect", "profiling", "profiling-build", "sample", "xctrace", "pgo"}, "unknown capability")
         self.toolchain = Path(config["rust_toolchain"]).resolve()
         self.tools = {
             "cargo": self.toolchain / "bin/cargo", "rustc": self.toolchain / "bin/rustc",
@@ -45,7 +45,9 @@ class Policy:
                                         env=local_env, text=True, timeout=20).strip())
 
     def capability(self, cap):
-        require(cap in self.capabilities, f"capability disabled locally: {cap}")
+        # Retain compatibility with existing installations' broad profiling switch.
+        require(cap in self.capabilities or cap in {"profiling-build", "sample", "xctrace"} and "profiling" in self.capabilities,
+                f"capability disabled locally: {cap}")
 
     def validate(self, spec):
         validate_job(spec)
@@ -60,12 +62,18 @@ class Policy:
                     binary = "match_benchmark" if step["mode"] == "jsonl" else "seed-seeker"
                     require(cmd["argv"][0] == f"${{JOB}}/artifacts/frozen/{variant}/{binary}", "compare must use frozen variant binaries")
             elif step["op"] == "profile":
-                self.capability("profiling")
+                self.capability(step["tool"])
                 self.command(step["command"])
                 require(step["command"]["argv"][0].startswith("${JOB}/artifacts/frozen/"), "profile only frozen job binaries")
                 require(not step["command"].get("wrappers"), "profiling commands cannot have wrappers")
                 require(step["command"]["stdin"] == "", "profiling commands require empty stdin")
-            elif step["op"] == "pgo_merge":
+            elif step["op"] == "train":
+                self.capability("pgo")
+                self.command(step["command"])
+                require(step["command"]["argv"][0] == "${JOB}/artifacts/frozen/training/match_benchmark", "train requires the frozen training adapter")
+                require(step["command"]["argv"][2] == "1", "PGO training uses one worker for non-atomic counters")
+                require(step["command"]["env"] == {"LLVM_PROFILE_FILE": "${JOB}/work/pgo/raw/%m-%p.profraw"}, "train requires the fixed profile output")
+            elif step["op"] in ("pgo_merge", "pgo_import"):
                 self.capability("pgo")
         return spec
 
@@ -78,7 +86,9 @@ class Policy:
         flags = env.get("RUSTFLAGS", "")
         if flags:
             self.capability("pgo")
-            require(flags in ("-Cprofile-generate=${JOB}/work/pgo/raw", "-Cprofile-use=${JOB}/work/pgo/merged.profdata"),
+            use_flags = ["-Cprofile-use=${JOB}/work/pgo/" + name + ".profdata" for name in ("merged", "checked")]
+            require(flags in ["-Cprofile-generate=${JOB}/work/pgo/raw", *use_flags,
+                             *(flag + " -Cllvm-args=-pgo-warn-missing-function" for flag in use_flags)],
                     "only fixed PGO RUSTFLAGS are allowed")
         if "LLVM_PROFILE_FILE" in env:
             self.capability("pgo")
@@ -91,7 +101,7 @@ class Policy:
             require(re.fullmatch(r"work/checkouts/[A-Za-z0-9_-]+", cmd["cwd"]), "Cargo cwd must be a disposable checkout root")
             approved = argv in (BUILD, FMT, CLIPPY, TEST, PROFILE_BUILD)
             if argv == PROFILE_BUILD:
-                self.capability("profiling")
+                self.capability("profiling-build")
             if argv[:len(FOCUSED_TEST)] == FOCUSED_TEST and len(argv) in (len(FOCUSED_TEST), len(FOCUSED_TEST) + 1):
                 approved = len(argv) == len(FOCUSED_TEST) or bool(re.fullmatch(r"[A-Za-z0-9_:.-]{1,200}", argv[-1])) and not argv[-1].startswith("-")
             require(approved, "Cargo argv does not match an approved build/check/test")
@@ -114,7 +124,7 @@ class Policy:
                 for line in cmd["stdin"].splitlines():
                     seed_request(json.loads(line), allow_range=False)
             elif binary == "equivalence":
-                self.capability("profiling")
+                self.capability("profiling-build")
                 require(len(argv) == 1 and cmd["stdin"] == "", "equivalence only supports its default invocation")
                 workers = "1"
             else:
@@ -131,11 +141,11 @@ class Policy:
             require(all(a in allowed for a in argv[1:-1]), "invalid inspector arguments")
             require(not env and not cmd["stdin"], "inspection requires empty env/stdin")
         elif argv[:3] == ["xcrun", "xctrace", "list"]:
-            self.capability("profiling")
+            self.capability("xctrace")
             require(argv == ["xcrun", "xctrace", "list", "templates"], "invalid xctrace list")
             require(not env and not cmd["stdin"], "xctrace requires empty env/stdin")
         elif argv[:3] == ["xcrun", "xctrace", "export"]:
-            self.capability("profiling")
+            self.capability("xctrace")
             require(len(argv) in (8, 9) and argv[3] == "--input" and argv[5] == "--output", "invalid xctrace export")
             job_argument(argv[4], "artifacts/")
             out = job_argument(argv[6], "artifacts/")

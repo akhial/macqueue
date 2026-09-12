@@ -167,7 +167,7 @@ python3 -m macqueue plan pgo --project seedfinder --candidate FULL_SHA \
   --query query.json --seeds 123,456,789 > pgo.json
 ```
 
-Enable `pgo` locally before submitting. The plan builds an ordinary baseline, trains a separate instrumented binary, merges raw profiles with the pinned Rust toolchain's `llvm-profdata`, and builds a PGO candidate in a separate target directory. Adjust the training seeds for the workload. `--profiling` on `plan benchmark` uses the repository's `profiling` profile and preserves symbols; enable `profiling` locally. See [the job format](docs/jobs.md) for `sample`, `xctrace`, inspection, wrappers, and artifact operations.
+Enable `pgo` locally before submitting. The plan builds an ordinary baseline, trains a separate instrumented binary, merges raw profiles with the pinned Rust toolchain's `llvm-profdata`, and builds a PGO candidate in a separate target directory. Adjust training queries/seeds for the workload; `--seed-range START:COUNT` works for both training and matching comparisons. Pass `--baseline-profile-sha256 HASH` to compare against the checked-in target profile instead of an ordinary baseline. `--profiling` on `plan benchmark` uses the repository's `profiling` profile and preserves symbols; enable `profiling-build` locally. See [the job format](docs/jobs.md) for `sample`, `xctrace`, inspection, wrappers, and artifact operations.
 
 ## Operations
 

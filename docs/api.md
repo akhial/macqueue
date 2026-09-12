@@ -2,7 +2,7 @@
 
 All routes except `GET /healthz` require `Authorization: Bearer TOKEN`. Tokens are separate for submitters and workers. They are never accepted in URLs. The service is for a private network or authenticated HTTPS reverse proxy, not unauthenticated public hosting.
 
-The server accepts JSON bodies of at most 1 MiB. Artifact bodies have a configurable limit, default 512 MiB. Requests must use `Content-Length`; chunked uploads are not supported. Errors are JSON: `{"error":"message"}`. Missing/bad authentication returns 401, unknown routes/jobs 404, validation or stale lease failures 400. Clients should retry transport/5xx failures, using the same submission key or lease. A 4xx failure needs attention rather than a blind retry.
+Job submission bodies may be at most 32 MiB; other JSON request bodies remain capped at 1 MiB. Client responses carrying jobs allow 33 MiB to include queue metadata. Artifact bodies have a configurable limit, default 512 MiB. Requests must use `Content-Length`; chunked uploads are not supported. Errors are JSON: `{"error":"message"}`. Missing/bad authentication returns 401, unknown routes/jobs 404, validation or stale lease failures 400. Clients should retry transport/5xx failures, using the same submission key or lease. A 4xx failure needs attention rather than a blind retry.
 
 ## Submitter routes
 
@@ -40,4 +40,3 @@ All job-specific worker routes also require `X-Job-Lease: CLAIM_LEASE`. A lease 
 SQLite transactions serialize claims. The service permits a single running job globally, matching a single benchmark Mac. Leases last 60 seconds and renew every 10 seconds. The worker uses an independent local watchdog with a conservative 40-second renewal deadline; it records renewal time before the HTTP request so a delayed reply cannot lengthen execution rights.
 
 Artifact uploads are streamed to a temporary file, verified, fsynced, and atomically published while checking the active lease. Files from interrupted uploads are removed when the request unwinds. After abrupt VPS termination, an orphan `.upload` file can remain; remove such files only while the server is stopped. SQLite WAL recovery preserves queue state, but this protocol cannot guarantee exactly-once effects inside arbitrary built code. Lost jobs are deliberately not replayed.
-

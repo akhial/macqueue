@@ -7,6 +7,12 @@ CLI and Mac policy enforce the structured job interface described in
 [jobs.md](jobs.md). Source code and documentation are cloned at
 `/home/adel/code/macqueue`; changes to that clone do not update installed services.
 
+The MQ-001/MQ-002/MQ-003 fixes and staged PGO/profiling rollout are documented in [rollout.md](rollout.md). Check `.state/rollout-status.json` as well as the readiness report: the server/CLI may be updated before the Mac administrator step finishes. Continue ordinary jobs during that interval; use new limits and optional operations only after the report marks the Mac updated.
+
+After rollout, matching requests accept up to **1,048,576 seeds** as an explicit JSON array (`--seeds-file`) or a compact consecutive range (`--seed-range START:COUNT`). The worker expands ranges, so existing adapters need no changes. Ceilings are **32 MiB per job**, **64 MiB per JSONL response**, **256 MiB cumulative stdout/stderr per process**, with the existing **512 MiB artifact budget**. These are ceilings, not workload defaults. Pilot smaller inputs, account for warmups and both variants, and split jobs when necessary. Matching results occur in session stdout and result rows, so artifact usage includes both copies.
+
+PGO plans support `--baseline-profile-sha256 HASH` for the checked-in `pgo/seed-seeker-aarch64-apple-darwin.profdata`. Use a full provisioned source SHA, verify the profile hash in that revision, and supply representative training plus held-out measurements. The generated plan trains CLI and matching with one worker, verifies LLVM versions, preserves raw/merged profiles and counters, emits missing-function diagnostics, and compares at 1/performance/available workers. Inspect those diagnostics before treating results as native deployment evidence. `--profiling` on a benchmark plan requires `profiling-build`; `sample` and `xctrace` have separate capabilities shown in the rollout report.
+
 Read `/home/adel/code/macqueue/.state/worker-readiness.json` before first use. It is
 an operator-written provisioning report, not a live heartbeat. `ready` means its
 listed revisions and dependencies passed a real Mac verification job. The laptop

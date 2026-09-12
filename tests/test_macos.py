@@ -146,7 +146,7 @@ fn main() {
         if not llvm.is_file():
             self.skipTest("llvm-tools-preview is not installed")
         config = {**self.config, "capabilities": ["cargo", "benchmark", "inspect", "pgo"]}
-        spec = pgo("seedfinder", self.sha, query={}, seeds=[1, 2, 3], seed_count=3, warmups=0, samples=1)
+        spec = pgo("seedfinder", self.sha, query={}, seed_range={'start': 1000, 'count': 4096}, seed_count=3, warmups=0, samples=1)
         root = self.base / "pgo-job"
         runner = Runner(Policy(config), root, spec, threading.Event())
         try:
@@ -160,9 +160,13 @@ fn main() {
         self.assertEqual({"baseline", "candidate", "training"}, set(result["frozen"]))
         self.assertGreater((root / "artifacts/pgo/merged.profdata").stat().st_size, 0)
         self.assertTrue(list((root / "work/pgo/raw").glob("*.profraw")))
+        training = [json.loads(line) for line in (root / 'artifacts/pgo/training.jsonl').read_text().splitlines()]
+        self.assertEqual(4096, training[1]['response']['tested'])
+        self.assertTrue(list((root / 'artifacts/pgo/raw').glob('*.profraw')))
+        self.assertTrue(list((root / 'artifacts/internal').glob('*pgo-profile-counts.stdout')))
 
     def test_profiling_build_preserves_symbols(self):
-        config = {**self.config, "capabilities": ["cargo", "benchmark", "profiling"]}
+        config = {**self.config, "capabilities": ["cargo", "benchmark", "profiling-build"]}
         spec = benchmark("seedfinder", self.sha, self.sha, query={}, seeds=[1], profiling=True, warmups=0, samples=1)
         spec["steps"] = spec["steps"][:2]
         spec["sources"] = {"baseline": self.sha}

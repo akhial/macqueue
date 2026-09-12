@@ -9,7 +9,8 @@ from collections import deque
 
 from .common import Invalid, json_bytes, require
 
-MAX_JSONL_RECORD_BYTES = 32 * 1024 * 1024
+MAX_JSONL_RECORD_BYTES = 64 * 1024 * 1024
+DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 
 
 class Stopped(RuntimeError):
@@ -22,7 +23,7 @@ class CleanupError(RuntimeError):
 
 class Process:
     def __init__(self, argv, cwd, env, stdout, stderr, *, sandbox, cancel, deadline,
-                 event=lambda _: None, max_output=32 * 1024 * 1024,
+                 event=lambda _: None, max_output=DEFAULT_MAX_OUTPUT_BYTES,
                  max_record_bytes=MAX_JSONL_RECORD_BYTES):
         self.cancel, self.deadline, self.event = cancel, deadline, event
         self.max_output = max_output

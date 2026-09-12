@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .common import Invalid, integer, json_bytes, keys, name, require
-from .schema import validate_job
+from .schema import MAX_JOB_BYTES, validate_job
 from .store import Store
 
 MAX_ARTIFACT = 512 * 1024 * 1024
@@ -65,8 +65,8 @@ class Handler(BaseHTTPRequestHandler):
         require(count <= limit, "request exceeds size limit")
         return count
 
-    def body(self):
-        count = self.length(1024 * 1024)
+    def body(self, maximum=1024 * 1024):
+        count = self.length(maximum)
         body = self.rfile.read(count)
         require(len(body) == count, "truncated request body")
         return json.loads(body, parse_constant=lambda _: (_ for _ in ()).throw(Invalid("invalid JSON number"))) if body else {}
@@ -95,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
             store = self.server.store
             if path == "/v1/jobs":
                 if method == "POST":
-                    spec = validate_job(self.body())
+                    spec = validate_job(self.body(MAX_JOB_BYTES))
                     key = self.headers.get("Idempotency-Key", "")
                     require(re.fullmatch(r"[a-zA-Z0-9_.-]{1,128}", key), "provide an Idempotency-Key")
                     self.reply(201, store.submit(spec, key))
@@ -207,4 +207,3 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
         except Exception:
             self.reply(500, {"error": "internal server error"})
-

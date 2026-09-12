@@ -1,10 +1,12 @@
 import hashlib
 import http.client
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from .common import digest, json_bytes, require
+from .schema import MAX_JOB_BYTES
 
 
 class RemoteError(RuntimeError):
@@ -37,8 +39,11 @@ class Client:
         try:
             connection.request(method, path, body=json_bytes(data) if data is not None else None, headers=headers)
             response = connection.getresponse()
-            raw = response.read(4 * 1024 * 1024 + 1)
-            require(len(raw) <= 4 * 1024 * 1024, "server response exceeds size limit")
+            carries_job = (path == "/v1/worker/claim" or path == "/v1/jobs" and method == "POST"
+                           or re.fullmatch(r"/v1/jobs/[a-f0-9]{32}(/cancel)?", path))
+            maximum = MAX_JOB_BYTES + 1024 * 1024 if carries_job else 4 * 1024 * 1024
+            raw = response.read(maximum + 1)
+            require(len(raw) <= maximum, "server response exceeds size limit")
             result = json.loads(raw)
             if response.status >= 300:
                 raise RemoteError(response.status, result.get("error", "request failed"))

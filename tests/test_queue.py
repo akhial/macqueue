@@ -89,6 +89,17 @@ class HTTPTests(unittest.TestCase):
         claim = self.worker.request('POST', '/v1/worker/claim', {'worker': 'mac', 'projects': ['seedfinder']})
         self.assertEqual(spec, claim['job']['spec'])
 
+    def test_explicit_million_seed_job_survives_large_http_responses(self):
+        from macqueue.plans import benchmark
+        spec = benchmark('seedfinder', 'a'*40, 'b'*40, query={}, seeds=[2**64-1] * 1048576)
+        submitted = self.submit.request('POST', '/v1/jobs', spec, key='large-explicit')
+        self.assertEqual(spec, submitted['spec'])
+        claimed = self.worker.request('POST', '/v1/worker/claim', {'worker': 'mac', 'projects': ['seedfinder']})
+        self.assertEqual(spec, claimed['job']['spec'])
+        read = self.submit.request('GET', '/v1/jobs/' + submitted['id'])
+        self.assertEqual(spec, read['spec'])
+
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

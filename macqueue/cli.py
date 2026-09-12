@@ -11,7 +11,7 @@ from pathlib import Path
 from .client import Client, RemoteError
 from .common import Invalid, private_write, read_secret, require
 from .plans import benchmark, correctness, pgo
-from .schema import validate_job
+from .schema import MAX_JOB_BYTES, validate_job
 from .store import Store, TERMINAL
 
 
@@ -52,9 +52,10 @@ def parser(*, extra_commands=()):
     plan.add_argument("--query", type=Path, help="path to the project's actual query JSON")
     seeds = plan.add_mutually_exclusive_group()
     seeds.add_argument("--seeds", help="comma-separated matching seed IDs (default: 123,456,789)")
-    seeds.add_argument("--seeds-file", type=Path, help="JSON array of matching seed IDs (up to 32768)")
+    seeds.add_argument("--seeds-file", type=Path, help="JSON array of matching seed IDs (up to 1048576)")
     seeds.add_argument("--seed-range", metavar="START:COUNT",
-                       help="consecutive matching seed IDs; benchmark only, up to 1048576 seeds")
+                       help="consecutive matching seed IDs; up to 1048576 seeds")
+    plan.add_argument("--baseline-profile-sha256", help="PGO only: compare the pinned checked-in target profile against fresh training")
     plan.add_argument("--seed-count", type=int, default=100000)
     plan.add_argument("--warmups", type=int, default=2)
     plan.add_argument("--samples", type=int, default=10)
@@ -135,23 +136,24 @@ def main(argv=None, *, extra_commands=()):
             else:
                 require(args.query is not None, "provide --query with a valid query JSON for your project")
                 if args.seed_range is not None:
-                    require(args.kind == "benchmark", "--seed-range is supported only by benchmark plans")
                     start, count = map(int, args.seed_range.split(":"))
                     matching = {"seed_range": {"start": start, "count": count}}
                 elif args.seeds_file is not None:
                     with args.seeds_file.open("rb") as stream:
-                        raw = stream.read(1024 * 1024 + 1)
-                    require(len(raw) <= 1024 * 1024, "seeds file exceeds 1 MiB")
+                        raw = stream.read(MAX_JOB_BYTES + 1)
+                    require(len(raw) <= MAX_JOB_BYTES, "seeds file exceeds 32 MiB")
                     matching = {"seeds": json.loads(raw)}
                 else:
                     matching = {"seeds": [int(s) for s in (args.seeds or "123,456,789").split(",")]}
                 kwargs = dict(query=json.loads(args.query.read_text()), **matching,
                               seed_count=args.seed_count, warmups=args.warmups, samples=args.samples)
                 if args.kind == "benchmark":
+                    require(args.baseline_profile_sha256 is None, "--baseline-profile-sha256 requires a PGO plan")
                     require(args.baseline is not None, "benchmark requires --baseline")
                     value = benchmark(args.project, args.baseline, args.candidate, profiling=args.profiling, **kwargs)
                 else:
-                    value = pgo(args.project, args.candidate, **kwargs)
+                    require(not args.profiling, "--profiling requires a benchmark plan")
+                    value = pgo(args.project, args.candidate, baseline_profile_sha256=args.baseline_profile_sha256, **kwargs)
             print_json(value)
         else:
             require(args.token_file is not None, "provide --token-file or MACQUEUE_TOKEN_FILE")

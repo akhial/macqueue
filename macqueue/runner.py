@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 import shutil
 import stat
 import tarfile
@@ -7,7 +8,7 @@ import time
 from pathlib import Path
 
 from .common import Invalid, digest, json_bytes, require, safe_path
-from .process import Process, Stopped
+from .process import DEFAULT_MAX_OUTPUT_BYTES, Process, Stopped
 from .schema import TARGET, expand_seed_request
 
 
@@ -52,7 +53,7 @@ class Runner:
                     "stdout": cmd["stdout"], "stderr": cmd["stderr"]})
         deadline = self.deadline if persistent else min(self.deadline, time.monotonic() + cmd["timeout_seconds"])
         return Process(argv, cwd, env, stdout, stderr, sandbox=sandbox, cancel=self.cancel, deadline=deadline,
-                       event=self.event, max_output=self.policy.config.get("max_output_bytes", 32 * 1024 * 1024))
+                       event=self.event, max_output=self.policy.config.get("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES))
 
     def execute(self, cmd, **kwargs):
         with self.start(cmd, **kwargs) as process:
@@ -270,16 +271,55 @@ class Runner:
                         sampler.pump()
                     require(sampler.proc.wait() == 0, "sample failed")
 
-    def pgo_merge(self, step):
+    def train(self, step):
+        cmd = step["command"]
+        require("match_benchmark" in self.frozen.get("training", {}), "training binary must be frozen in this job")
+        require(digest(self.path("artifacts/frozen/training/match_benchmark")) == self.frozen["training"]["match_benchmark"]["sha256"], "training binary checksum changed")
+        output = self.path(step["output"])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("xb") as stream, self.start(cmd, persistent=True) as session:
+            session.keep_lines = True
+            ready = session.record(cmd["timeout_seconds"])
+            if "ready" in step:
+                require(ready.get(step["ready"]["field"]) == step["ready"]["equals"], "unexpected training readiness record")
+            stream.write(json_bytes({"kind": "ready", "record": ready}) + b"\n")
+            for request in step["requests"]:
+                result = session.request(expand_seed_request(request), cmd["timeout_seconds"])
+                stream.write(json_bytes({"request": request, **result}) + b"\n")
+                stream.flush()
+            session.finish_session()
+
+    def llvm_profdata(self):
         tool = self.policy.tools["llvm-profdata"]
-        require(tool.is_file(), "install llvm-tools-preview in the pinned Rust toolchain")
+        require(tool.is_file(), "provision llvm-tools in the pinned Rust toolchain")
+        rust = self.internal([str(self.policy.tools["rustc"]), "-Vv"], label="pgo-rust-version")
+        llvm = self.internal([str(tool), "--version"], label="llvm-profdata-version")
+        rust_version = re.search(r"LLVM version: (\d+\.\d+\.\d+)", rust)
+        llvm_version = re.search(r"LLVM version (\d+\.\d+\.\d+)", llvm)
+        require(rust_version and llvm_version and rust_version[1] == llvm_version[1], "llvm-profdata version must match rustc's LLVM version")
+        return tool
+
+    def pgo_import(self, step):
+        source = self.path(step["source"], exists=True)
+        require(source.is_file() and digest(source) == step["sha256"], "checked-in PGO profile SHA-256 mismatch")
+        target = self.path("work/pgo/checked.profdata")
+        require(not target.exists(), "checked profile already imported")
+        self.write("work/pgo/checked.profdata", source.read_bytes())
+        tool = self.llvm_profdata()
+        self.internal([str(tool), "show", str(target)], label="checked-profile-summary")
+        self.copy("work/pgo/checked.profdata", "artifacts/pgo/checked.profdata")
+
+    def pgo_merge(self, step):
+        tool = self.llvm_profdata()
         raw = self.path(step["raw_dir"], exists=True)
         profiles = [self.path(str(p.relative_to(self.root)), exists=True) for p in sorted(raw.glob("*.profraw"))]
         require(0 < len(profiles) <= 4096 and all(p.is_file() for p in profiles), "expected 1..4096 raw profiles")
         output = self.path(step["output"])
         require(not output.exists(), "merged profile already exists")
-        self.internal([str(tool), "--version"], label="llvm-profdata-version")
         self.internal([str(tool), "merge", "-o", str(output), *map(str, profiles)], label="pgo-merge", timeout=600)
+        counts = self.internal([str(tool), "show", "--all-functions", "--counts", str(output)], label="pgo-profile-counts")
+        maximum = re.search(r"Maximum function count: (\d+)", counts)
+        require(maximum and int(maximum[1]) > 0, "merged profile has no executed functions")
 
     def run(self):
         self.prepare()
@@ -310,6 +350,10 @@ class Runner:
                 self.compare(step)
             elif op == "profile":
                 self.profile(step)
+            elif op == "train":
+                self.train(step)
+            elif op == "pgo_import":
+                self.pgo_import(step)
             elif op == "pgo_merge":
                 self.pgo_merge(step)
             self.event({"event": "step_finished", "step": step["id"]})
