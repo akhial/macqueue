@@ -1,13 +1,26 @@
 # Pair credentials and provision offline source snapshots
 
+This is the operator procedure for initial pairing or an explicitly requested
+manual provisioning fallback. Once `source-provision` is enabled, agents should
+use [self-service provisioning](self-service-provisioning.md) for routine committed
+source and crates.io dependency changes; no administrator handoff is needed.
+
 This procedure keeps the hidden `_macqueue` account and LaunchDaemon intact.
 It fetches dependencies as the Mac operator into a fresh private staging directory,
 then installs a reviewed snapshot with administrator authentication. Cargo fetch
 does not build the project; all actual job execution stays in the sandboxed worker.
 
-On the VPS, export exact committed revisions with `macqueue export-source`; see
-[agent operations](agent-operations.md). The active worktree is never altered by
-export. On the Mac, from this Macqueue repository:
+For this manual procedure, export exact committed revisions on the VPS:
+
+```sh
+macqueue export-source --baseline FULL_BASELINE_SHA --candidate FULL_CANDIDATE_SHA \
+  --output /home/adel/code/macqueue/.state/seedfinder-candidate.bundle
+```
+
+The export excludes uncommitted edits and leaves the active worktree unchanged.
+Existing output files are never overwritten; use a new filename for another
+export. Give the operator both full SHAs and the bundle path. On the Mac, from
+this Macqueue repository:
 
 ```sh
 umask 077

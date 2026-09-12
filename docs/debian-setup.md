@@ -78,26 +78,36 @@ records are retained for domain-specific comparison of matches and witnesses.
 The VPS's Python benchmark harness is not authorized to run as an arbitrary Mac
 job; use structured steps, or separately approve a specific harness hash.
 
-## Source provisioning is separate from submission
+## Provision source before build/test jobs
 
-Jobs accept full committed revisions already present in the Mac's local mirror.
-They neither upload working-tree edits nor fetch dependencies. `source-status`
-shows the main repository and active worktree without refreshing their indexes.
-Do not submit the current HEAD expecting uncommitted edits to be tested.
+Use full lowercase 40-character commit SHAs. `source-status` shows the VPS main
+repository and active worktree without refreshing their indexes; it does not
+report Mac provisioning state. Commit a candidate using the normal review
+workflow first; uncommitted worktree edits are excluded.
 
-Once the agent has committed a candidate using its normal workflow, export the
-chosen revisions into a standalone bundle:
+After one-time worker enablement of `source-provision`, run:
 
 ```sh
-macqueue export-source --baseline FULL_BASELINE_SHA --candidate FULL_CANDIDATE_SHA \
-  --output /home/adel/seedfinder-source.bundle
+macqueue provision --candidate FULL_CANDIDATE_SHA --baseline FULL_BASELINE_SHA
 ```
 
-The output is 0600 and existing files are never overwritten. Export uses temporary
-refs and reports excluded uncommitted files; it does not mutate either checkout,
-their shared Git refs or their index. Provision the bundle into the Mac mirror
-and populate its dedicated offline Cargo cache through trusted local setup before
-submitting real work. The queue deliberately has no source-download hook.
+`--baseline` is optional. The helper exports exact commits, vendors their locked
+dependencies on the VPS, uploads the package, and waits for a Mac provisioning
+job. Use its `succeeded` status and `result.source_provisioning` as confirmation
+before submitting build/test/benchmark jobs, which remain offline. With
+`--no-wait`, wait separately using `macqueue wait JOB_ID`. Routine committed source
+and crates.io dependency changes need no Mac sudo or administrator handoff.
+
+See [self-service provisioning](self-service-provisioning.md) for supported
+dependencies, retries, and limits, and [agent operations](agent-operations.md) for
+job submission. On the installed VPS, these guides are under
+`/home/adel/code/macqueue/docs/`.
+
+`export-source` is an operator fallback for initial setup or a separately reviewed
+import; a standalone bundle export does not provision the Mac. Follow the
+[operator provisioning procedure](macos-provisioning.md) only when that path is
+requested. Repository Cargo configuration, Git/alternative-registry dependencies,
+and toolchain or worker-policy changes require operator review.
 
 ## Pair the Mac
 

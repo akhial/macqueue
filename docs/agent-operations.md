@@ -29,9 +29,10 @@ job state. Queued work waits for the Mac until the job expires (24 hours by defa
 
 ## Revisions and source changes
 
-The project name is `seedfinder`. Jobs accept full 40-character **commit** SHAs
-already provisioned into the Mac's local mirror. They do not include uncommitted
-worktree edits. The optimization worktree is
+The project name is `seedfinder`. Use full lowercase 40-character **commit** SHAs.
+Build/test/benchmark jobs require those revisions in a validated source package
+or the Mac's protected mirror; they do not include uncommitted worktree edits.
+The optimization worktree is
 `/home/adel/.t3/worktrees/shpd-seed-seeker/t3code-b11a8beb` and shares Git objects
 with `/home/adel/code/shpd-seed-seeker`.
 
@@ -39,23 +40,33 @@ with `/home/adel/code/shpd-seed-seeker`.
 macqueue source-status
 ```
 
-Use the agent's existing review/commit workflow to commit a candidate. Do not
-reset, stash, or change other worktrees just to submit a job. To request provisioning
-of a new candidate, export a standalone bundle containing baseline and candidate:
+`source-status` reports the VPS repository and worktree state, not which revisions
+are provisioned on the Mac. Use the agent's existing review/commit workflow to
+commit a candidate. Do not reset, stash, or change other worktrees just to submit
+a job. Provision the chosen revisions directly:
 
 ```sh
-macqueue export-source --baseline FULL_BASELINE_SHA --candidate FULL_CANDIDATE_SHA \
-  --output /home/adel/code/macqueue/.state/seedfinder-candidate.bundle
+macqueue provision --candidate FULL_CANDIDATE_SHA --baseline FULL_BASELINE_SHA
 ```
 
-Existing output files are never overwritten; use a new filename for another
-export. Notify the Mac operator of both full SHAs and the bundle path. For this
-setup handoff, those values can also be recorded in
-`/home/adel/code/macqueue/.state/candidate-request.json` as
-`{"baseline":"...","candidate":"...","bundle":"/absolute/path.bundle"}`.
-This file is an operator handoff, not an automatically consumed queue endpoint.
-Wait for provisioning confirmation before submitting a new revision. No job
-fetches source or dependencies, and no VPS-to-Mac SSH access is required.
+Omit `--baseline` when only the candidate needs importing. The command exports
+the committed source, vendors locked dependencies on the VPS, uploads the package,
+and waits for the Mac provisioning job. A `succeeded` job with
+`result.source_provisioning` is the confirmation to use before submitting ordinary
+jobs with those SHAs. It proves source and offline dependency availability, not
+correctness or performance. With `--no-wait`, use `macqueue wait JOB_ID` yourself.
+
+Routine committed source and crates.io dependency changes need no operator
+notification, `candidate-request.json`, worker credential transfer, or Mac sudo.
+Existing readiness JSON does not enumerate future self-service imports. See
+[self-service provisioning](self-service-provisioning.md) for retries and limits.
+
+`export-source` remains a manual bundle export for operator-led initial setup or
+an explicitly requested fallback; exporting a bundle alone does not provision it.
+The [operator provisioning procedure](macos-provisioning.md) covers that path.
+Repository Cargo configuration, Git/alternative-registry dependencies, and
+toolchain or worker-policy changes still require operator review. Ordinary
+build/test/benchmark commands remain offline.
 
 ## Benchmark jobs
 
@@ -129,11 +140,11 @@ reaches completion, `worker-result.json`, logs, frozen binaries/manifests, and
 
 For `lost`, inspect the reason and use a new submission key only when deliberately
 retrying. The worker does not automatically replay jobs after a lease loss.
-For a missing source/dependency, request provisioning rather than adding network
-access or shell commands to the job. For permission or sandbox failures, preserve
+For a missing source/dependency, run `macqueue provision` with the required SHAs
+and inspect its result. For permission or sandbox failures, preserve
 the artifact and report the failing command to the Mac operator.
 
 Initial capabilities are Cargo, benchmarks, and executable inspection. Profiling
 and PGO remain disabled until their tools and local policy are provisioned. Leave
-service configuration, worker credentials, source-mirror updates and account
+service configuration, worker credentials, protected-mirror updates and account
 settings to the operator; submitter access does not require administrator actions.
