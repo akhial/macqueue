@@ -65,7 +65,7 @@ ${JOB}/artifacts/frozen/VARIANT/match_benchmark QUERY_JSON WORKERS
 ${JOB}/artifacts/frozen/VARIANT/equivalence
 ```
 
-`equivalence` is available only with the local profiling capability and uses its default invocation. The query argument is a JSON object; its domain schema belongs to the benchmark. `match_benchmark` stdin contains JSON-lines seed requests, each with at most 1,024 unsigned 64-bit seeds. The generic exec operation sends stdin and closes it, preserving all output.
+`equivalence` is available only with the local profiling capability and uses its default invocation. The query argument is a JSON object; its domain schema belongs to the benchmark. `match_benchmark` stdin contains JSON-lines seed requests, each with at most 32,768 unsigned 64-bit seeds, subject to the 64 KiB total exec stdin limit. The generic exec operation sends stdin and closes it, preserving all output.
 
 Set `"wrappers":["time","caffeinate"]` in a command to wrap it with `/usr/bin/time -l` and `caffeinate -i`, in the listed outer-to-inner order. Their output is captured with the command. The worker's timeout and process-group cleanup apply to wrappers too.
 
@@ -76,6 +76,12 @@ A `compare` step has `mode` (`process` or `jsonl`), two complete command objects
 Use `"worker_counts":[1,"performance","available"]`. Counts are resolved with `hw.perflevel0.physicalcpu` and `hw.activecpu`, deduplicated, and recorded. Missing requested hardware information fails the comparison rather than silently choosing a different count. Explicit integer counts are also supported.
 
 `process` mode runs a fresh `seed-seeker` per warmup/sample. `jsonl` mode starts one `match_benchmark` process per variant per worker count, consumes each readiness record, and keeps the sessions alive through warmups and samples. Both processes may be alive but only one request is outstanding. After every request completes, execution moves to the other variant. Sample pairs alternate AB, BA, AB, BA. Requests are replayed identically to both variants, and warmup records remain marked separately.
+
+Matching comparisons accept `{"seeds":[123,456]}` (up to 32,768 IDs) or `{"seed_range":{"start":1000000,"count":65536}}` (up to 1,048,576 consecutive uint64 IDs without overflow). The worker expands a range into an ordinary `seeds` array once per pair, before timing, and sends that identical array as one request to both executables. Existing adapters need no changes. Results retain the compact descriptor. The 1 MiB job/API limit remains in place.
+
+Generate a range with `macqueue plan benchmark … --seed-range 1000000:65536`, or supply a JSON array with `--seeds-file seeds.json`. These control matching requests; `--seed-count` controls the CLI benchmark. With 256-seed work chunks, 65,536 seeds provide 256 chunks. Choose the query/count using a pilot so each sample lasts long enough to measure; the upper bound is not a recommended workload size.
+
+A JSONL record may be up to 32 MiB, bounded further by the operator's total process output limit (32 MiB by default, including stderr and every warmup/sample). Dense matches can hit that budget; output is never silently truncated in artifacts. Use the adapter's `response.seconds` for search timing in Seed Seeker, and check `tested` and full match results before accepting measurements.
 
 For strict readiness validation, add:
 

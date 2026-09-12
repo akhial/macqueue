@@ -36,7 +36,17 @@ class MacOSIntegrationTests(unittest.TestCase):
             "cli/src/main.rs": 'fn main() { println!("benchmark completed"); }\n',
             "ffi/Cargo.toml": '[package]\nname = "shpd-seedfinder-ffi"\nversion = "0.1.0"\nedition = "2021"\n',
             "ffi/src/lib.rs": 'pub fn value() -> u64 { 42 }\n',
-            "ffi/examples/match_benchmark.rs": 'use std::io::{self, BufRead};\nfn main() {\n println!("{{\\"event\\":\\"ready\\"}}");\n for line in io::stdin().lock().lines() {\n  let _ = line.unwrap();\n  println!("{{\\"elapsed_ns\\":100,\\"tested\\":3,\\"matches\\":[],\\"recipes\\":[],\\"witnesses\\":[]}}");\n }\n}\n',
+            "ffi/examples/match_benchmark.rs": r'''use std::io::{self, BufRead};
+fn main() {
+ println!("{{\"event\":\"ready\"}}");
+ for line in io::stdin().lock().lines() {
+  let line = line.unwrap();
+  assert!(line.starts_with("{\"seeds\":["));
+  let tested = line.matches(',').count() + 1;
+  println!("{{\"elapsed_ns\":100,\"tested\":{},\"matches\":[],\"recipes\":[],\"witnesses\":[]}}", tested);
+ }
+}
+''',
             "core/Cargo.toml": '[package]\nname = "shpd-seedfinder-core"\nversion = "0.1.0"\nedition = "2021"\n',
             "core/src/lib.rs": '#[test]\nfn smoke() { assert_eq!(2 + 2, 4); }\n',
             "core/examples/equivalence.rs": 'fn main() { println!("equivalent"); }\n',
@@ -62,7 +72,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertTrue(doctor(self.config)["ok"])
 
     def test_offline_build_freeze_persistent_comparison_and_artifact(self):
-        spec = benchmark("seedfinder", self.sha, self.sha, query={}, seeds=[123, 456, 789],
+        spec = benchmark("seedfinder", self.sha, self.sha, query={}, seed_range={"start": 123, "count": 4096},
                          seed_count=3, warmups=1, samples=2)
         root = self.base / "benchmark-job"
         runner = Runner(Policy(self.config), root, spec, threading.Event())
@@ -81,7 +91,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         samples = [r for r in records if r["kind"] == "sample"]
         self.assertEqual(4 * len(set([1, *runner.cores.values()])), len(samples))
         self.assertEqual(["baseline", "candidate", "candidate", "baseline"], [r["variant"] for r in samples[:4]])
-        self.assertTrue(all(r["response"]["tested"] == 3 for r in samples))
+        self.assertTrue(all(r["response"]["tested"] == 4096 for r in samples))
         archive = self.base / "benchmark.tar.gz"
         manifest = pack_artifacts(root, archive)
         with tarfile.open(archive) as tar:

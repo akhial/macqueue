@@ -19,7 +19,7 @@ def print_json(value):
     print(json.dumps(value, indent=2, allow_nan=False))
 
 
-def parser():
+def parser(*, extra_commands=()):
     root = argparse.ArgumentParser(prog="macqueue", description="Pull-based Cargo and benchmark jobs for Apple Silicon")
     sub = root.add_subparsers(dest="action", required=True)
     tokens = sub.add_parser("tokens", help="create separate 0600 submitter and worker tokens")
@@ -50,7 +50,11 @@ def parser():
     plan.add_argument("--candidate", required=True)
     plan.add_argument("--baseline")
     plan.add_argument("--query", type=Path, help="path to the project's actual query JSON")
-    plan.add_argument("--seeds", default="123,456,789")
+    seeds = plan.add_mutually_exclusive_group()
+    seeds.add_argument("--seeds", help="comma-separated matching seed IDs (default: 123,456,789)")
+    seeds.add_argument("--seeds-file", type=Path, help="JSON array of matching seed IDs (up to 32768)")
+    seeds.add_argument("--seed-range", metavar="START:COUNT",
+                       help="consecutive matching seed IDs; benchmark only, up to 1048576 seeds")
     plan.add_argument("--seed-count", type=int, default=100000)
     plan.add_argument("--warmups", type=int, default=2)
     plan.add_argument("--samples", type=int, default=10)
@@ -71,12 +75,14 @@ def parser():
         if action == "logs":
             cmd.add_argument("--after", type=int, default=-1)
             cmd.add_argument("--follow", action="store_true")
+    for name, help_text in extra_commands:
+        sub.add_parser(name, help=help_text)
     return root
 
 
-def main(argv=None):
+def main(argv=None, *, extra_commands=()):
     os.umask(0o077)
-    args = parser().parse_args(argv)
+    args = parser(extra_commands=extra_commands).parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         action = args.action
@@ -128,7 +134,18 @@ def main(argv=None):
                 value = correctness(args.project, args.candidate, args.test_filter)
             else:
                 require(args.query is not None, "provide --query with a valid query JSON for your project")
-                kwargs = dict(query=json.loads(args.query.read_text()), seeds=[int(s) for s in args.seeds.split(",")],
+                if args.seed_range is not None:
+                    require(args.kind == "benchmark", "--seed-range is supported only by benchmark plans")
+                    start, count = map(int, args.seed_range.split(":"))
+                    matching = {"seed_range": {"start": start, "count": count}}
+                elif args.seeds_file is not None:
+                    with args.seeds_file.open("rb") as stream:
+                        raw = stream.read(1024 * 1024 + 1)
+                    require(len(raw) <= 1024 * 1024, "seeds file exceeds 1 MiB")
+                    matching = {"seeds": json.loads(raw)}
+                else:
+                    matching = {"seeds": [int(s) for s in (args.seeds or "123,456,789").split(",")]}
+                kwargs = dict(query=json.loads(args.query.read_text()), **matching,
                               seed_count=args.seed_count, warmups=args.warmups, samples=args.samples)
                 if args.kind == "benchmark":
                     require(args.baseline is not None, "benchmark requires --baseline")
@@ -178,4 +195,3 @@ def main(argv=None):
     except (Invalid, ValueError, OSError, RemoteError) as exc:
         print(f"macqueue: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
-

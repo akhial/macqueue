@@ -5,6 +5,38 @@ import re
 from .common import integer, keys, name, relative, require
 
 TARGET = "aarch64-apple-darwin"
+MAX_EXPLICIT_SEEDS = 32768
+MAX_RANGE_SEEDS = 1048576
+
+
+def seed_request(value, *, allow_range=True):
+    """Validate the compact job description without allocating an expanded range."""
+    require(isinstance(value, dict), "matching request must be an object")
+    if "seed_range" in value:
+        require(allow_range, "seed_range is supported only by JSONL compare steps")
+        keys(value, ("seed_range",))
+        item = value["seed_range"]
+        keys(item, ("start", "count"))
+        integer(item["start"], 0, 2**64 - 1, "seed range start")
+        integer(item["count"], 1, MAX_RANGE_SEEDS, "seed range count")
+        require(item["start"] + item["count"] <= 2**64, "seed range exceeds uint64")
+    else:
+        keys(value, ("seeds",))
+        require(isinstance(value["seeds"], list) and 1 <= len(value["seeds"]) <= MAX_EXPLICIT_SEEDS,
+                f"seeds must contain 1..{MAX_EXPLICIT_SEEDS} values; use seed_range for larger comparisons")
+        for seed in value["seeds"]:
+            integer(seed, 0, 2**64 - 1, "seed")
+    return value
+
+
+def expand_seed_request(value):
+    seed_request(value)
+    if "seeds" in value:
+        return value
+    item = value["seed_range"]
+    return {"seeds": list(range(item["start"], item["start"] + item["count"]))}
+
+
 BUILD = ["cargo", "build", "--locked", "--offline", "--release", "--target", TARGET,
          "-p", "shpd-seedfinder-cli", "-p", "shpd-seedfinder-ffi",
          "--bin", "seed-seeker", "--example", "match_benchmark"]
@@ -114,10 +146,7 @@ def validate_job(job):
             if step["mode"] == "jsonl":
                 require(bool(step["requests"]), "jsonl mode requires seeds requests")
                 for request in step["requests"]:
-                    keys(request, ("seeds",))
-                    require(isinstance(request["seeds"], list) and 1 <= len(request["seeds"]) <= 1024, "invalid seeds")
-                    for seed in request["seeds"]:
-                        integer(seed, 0, 2**64 - 1, "seed")
+                    seed_request(request)
             else:
                 require(not step["requests"], "process mode does not accept requests")
             if "ready" in step:

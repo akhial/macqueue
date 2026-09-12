@@ -9,6 +9,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+SOURCE_COMMANDS = (("source-status", "show repository/worktree revisions and uncommitted changes"),
+                   ("export-source", "export exact committed revisions to a standalone Git bundle"))
+
 
 def git(path, *args):
     env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
@@ -83,7 +86,7 @@ def main():
             argv.append("--allow-http")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from macqueue.cli import main as cli
-    cli(argv)
+    cli(argv, extra_commands=SOURCE_COMMANDS)
 
 
 if __name__ == "__main__":

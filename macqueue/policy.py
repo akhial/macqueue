@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from .common import keys, relative, require, safe_path
-from .schema import BUILD, CLIPPY, FMT, FOCUSED_TEST, PROFILE_BUILD, TEST, TARGET, validate_job
+from .schema import BUILD, CLIPPY, FMT, FOCUSED_TEST, PROFILE_BUILD, TEST, TARGET, seed_request, validate_job
 
 
 def job_argument(value, prefix):
@@ -112,10 +112,7 @@ class Policy:
                 require(isinstance(json.loads(argv[1]), dict), "query must be a JSON object")
                 workers = argv[2]
                 for line in cmd["stdin"].splitlines():
-                    request = json.loads(line)
-                    keys(request, ("seeds",))
-                    require(isinstance(request["seeds"], list) and len(request["seeds"]) <= 1024 and
-                            all(type(s) is int and 0 <= s < 2**64 for s in request["seeds"]), "invalid seeds request")
+                    seed_request(json.loads(line), allow_range=False)
             elif binary == "equivalence":
                 self.capability("profiling")
                 require(len(argv) == 1 and cmd["stdin"] == "", "equivalence only supports its default invocation")

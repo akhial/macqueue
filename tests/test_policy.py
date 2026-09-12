@@ -8,10 +8,27 @@ from macqueue.common import Invalid, safe_path
 from macqueue.plans import benchmark, command, correctness, pgo
 from macqueue.policy import Policy
 from macqueue.runner import pack_artifacts
-from macqueue.schema import validate_job
+from macqueue.schema import MAX_EXPLICIT_SEEDS, MAX_RANGE_SEEDS, expand_seed_request, seed_request, validate_job
 
 
 class PolicyTests(unittest.TestCase):
+    def test_matching_seed_bounds_and_compact_ranges(self):
+        for request in ({'seeds': [2**64-1] * MAX_EXPLICIT_SEEDS},
+                        {'seed_range': {'start': 2**64-MAX_RANGE_SEEDS, 'count': MAX_RANGE_SEEDS}}):
+            job = benchmark('seedfinder', 'a'*40, 'b'*40, query={}, **request)
+            self.policy.validate(job)
+            self.assertLess(len(json.dumps(job).encode()), 1024**2)
+        self.assertEqual({'seeds': [123, 124, 125]}, expand_seed_request({'seed_range': {'start': 123, 'count': 3}}))
+        invalid = [{'seeds': []}, {'seeds': [0] * (MAX_EXPLICIT_SEEDS+1)}, {'seeds': [True]},
+                   {'seed_range': {'start': 0, 'count': 0}}, {'seed_range': {'start': 0, 'count': True}},
+                   {'seed_range': {'start': 2**64-1, 'count': 2}},
+                   {'seed_range': {'start': 0, 'count': MAX_RANGE_SEEDS+1}},
+                   {'seeds': [1], 'seed_range': {'start': 0, 'count': 1}},
+                   {'seed_range': {'start': 0, 'count': 1, 'step': 2}}]
+        for request in invalid:
+            with self.subTest(request=str(request)[:100]), self.assertRaises(Invalid):
+                seed_request(request)
+
     def setUp(self):
         self.policy = Policy({"rust_toolchain": "/toolchain", "cargo_home": "/cargo", "projects": {"seedfinder": "/mirror"},
                               "capabilities": ["cargo", "benchmark", "inspect", "pgo", "profiling"]})
@@ -80,4 +97,3 @@ class PolicyTests(unittest.TestCase):
                 correctness("seedfinder", revision)
         with self.assertRaises(Invalid):
             self.policy.validate(correctness("seedfinder", "a" * 40, "--config=evil"))
-

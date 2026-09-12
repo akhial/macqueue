@@ -1,7 +1,11 @@
 import importlib.util
+import contextlib
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE = Path(__file__).resolve().parents[1] / "deploy/debian/agent.py"
@@ -14,6 +18,18 @@ serve_spec.loader.exec_module(serve)
 
 
 class SourceExportTests(unittest.TestCase):
+    def test_installed_wrapper_help_includes_source_commands(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'client.json').write_text(json.dumps({}))
+            output = io.StringIO()
+            with patch.object(agent, '__file__', str(root / 'agent.py')), patch('sys.argv', ['macqueue', '--help']), contextlib.redirect_stdout(output):
+                with self.assertRaises(SystemExit) as result:
+                    agent.main()
+            self.assertEqual(0, result.exception.code)
+            for action in ('source-status', 'export-source', 'plan', 'submit'):
+                self.assertIn(action, output.getvalue())
+
     def test_systemd_credential_adapter_keeps_owner_only_mode_across_restart(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

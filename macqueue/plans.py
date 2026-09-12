@@ -2,7 +2,7 @@
 import json
 
 from .common import require
-from .schema import BUILD, CLIPPY, FMT, FOCUSED_TEST, PROFILE_BUILD, TEST, validate_job
+from .schema import BUILD, CLIPPY, FMT, FOCUSED_TEST, PROFILE_BUILD, TEST, seed_request, validate_job
 
 
 def command(argv, variant="candidate", *, target=None, timeout=3600, log=None, env=None):
@@ -24,7 +24,7 @@ def build_steps(variant, *, profiling=False, target=None, flags=""):
              "target_dir": "work/targets/" + target, "profile": "profiling" if profiling else "release"}]
 
 
-def compare_step(mode, query, seeds, seed_count, workers, warmups, samples):
+def compare_step(mode, query, request, seed_count, workers, warmups, samples):
     commands = {}
     binary = "match_benchmark" if mode == "jsonl" else "seed-seeker"
     for variant in ("baseline", "candidate"):
@@ -33,19 +33,21 @@ def compare_step(mode, query, seeds, seed_count, workers, warmups, samples):
         commands[variant] = command(argv, variant, timeout=300, log=f"{variant}-{binary}", env={})
     return {"id": "compare-" + binary, "op": "compare", "mode": mode, "commands": commands,
             "worker_counts": workers, "warmups": warmups, "samples": samples,
-            "requests": [{"seeds": seeds}] if mode == "jsonl" else [],
+            "requests": [request] if mode == "jsonl" else [],
             "output": f"artifacts/results/{binary}.jsonl"}
 
 
-def benchmark(project, baseline, candidate, *, query, seeds, seed_count=100000, warmups=2, samples=10, profiling=False):
+def benchmark(project, baseline, candidate, *, query, seeds=None, seed_range=None, seed_count=100000, warmups=2, samples=10, profiling=False):
     require(isinstance(query, dict), "benchmark query must be a JSON object")
+    require((seeds is None) != (seed_range is None), "provide either seeds or seed_range")
+    request = seed_request({"seed_range": seed_range} if seed_range is not None else {"seeds": seeds})
     spec = {"version": 1, "project": project, "label": "baseline/candidate benchmark",
             "sources": {"baseline": baseline, "candidate": candidate}, "timeout_seconds": 14400,
             "expires_in_seconds": 86400, "steps": []}
     for variant in ("baseline", "candidate"):
         spec["steps"].extend(build_steps(variant, profiling=profiling))
     for mode in ("process", "jsonl"):
-        spec["steps"].append(compare_step(mode, query, seeds, seed_count, [1, "performance", "available"], warmups, samples))
+        spec["steps"].append(compare_step(mode, query, request, seed_count, [1, "performance", "available"], warmups, samples))
     return validate_job(spec)
 
 

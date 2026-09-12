@@ -82,6 +82,13 @@ class QueueTests(unittest.TestCase):
 
 
 class HTTPTests(unittest.TestCase):
+    def test_compact_million_seed_request_survives_submit_and_claim(self):
+        from macqueue.plans import benchmark
+        spec = benchmark('seedfinder', 'a'*40, 'b'*40, query={}, seed_range={'start': 0, 'count': 1048576})
+        self.submit.request('POST', '/v1/jobs', spec, key='large-range')
+        claim = self.worker.request('POST', '/v1/worker/claim', {'worker': 'mac', 'projects': ['seedfinder']})
+        self.assertEqual(spec, claim['job']['spec'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

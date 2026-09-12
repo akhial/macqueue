@@ -9,6 +9,8 @@ from collections import deque
 
 from .common import Invalid, json_bytes, require
 
+MAX_JSONL_RECORD_BYTES = 32 * 1024 * 1024
+
 
 class Stopped(RuntimeError):
     pass
@@ -20,9 +22,11 @@ class CleanupError(RuntimeError):
 
 class Process:
     def __init__(self, argv, cwd, env, stdout, stderr, *, sandbox, cancel, deadline,
-                 event=lambda _: None, max_output=32 * 1024 * 1024):
+                 event=lambda _: None, max_output=32 * 1024 * 1024,
+                 max_record_bytes=MAX_JSONL_RECORD_BYTES):
         self.cancel, self.deadline, self.event = cancel, deadline, event
         self.max_output = max_output
+        self.max_record_bytes = min(max_record_bytes, max_output)
         self.total = 0
         self.selector = selectors.DefaultSelector()
         self.pending = bytearray()
@@ -78,14 +82,17 @@ class Process:
             self.files[key.data].flush()
             self.event({"stream": key.data, "text": data[:4096].decode(errors="replace"), "truncated": len(data) > 4096})
             if self.keep_lines and key.data == "stdout":
+                search_from = len(self.partial)
                 self.partial.extend(data)
-                require(len(self.partial) <= 1024 * 1024, "JSON-lines record exceeds 1 MiB")
-                while b"\n" in self.partial:
-                    line, _, rest = self.partial.partition(b"\n")
-                    self.partial = bytearray(rest)
+                while (newline := self.partial.find(b"\n", search_from)) != -1:
+                    require(newline <= self.max_record_bytes, "JSON-lines record exceeds configured byte limit")
+                    line = bytes(self.partial[:newline])
+                    del self.partial[:newline + 1]
+                    search_from = 0
                     if line.strip():
                         self.lines.append(line)
                         require(len(self.lines) <= 64, "unsolicited JSON-lines output limit exceeded")
+                require(len(self.partial) <= self.max_record_bytes, "JSON-lines record exceeds configured byte limit")
 
     def send(self, data, deadline=None):
         require(not self.pending, "previous stdin write is pending")
@@ -132,6 +139,8 @@ class Process:
         while self.selector.get_map() or self.proc.poll() is None:
             self.pump(deadline)
         require(self.proc.wait() == 0, "benchmark failed on shutdown")
+        require(not self.lines, "unexpected benchmark output on shutdown")
+        require(not self.partial, "incomplete benchmark output on shutdown")
 
     def close(self):
         if self.closed:

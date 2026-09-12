@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .common import Invalid, digest, json_bytes, require, safe_path
 from .process import Process, Stopped
-from .schema import TARGET
+from .schema import TARGET, expand_seed_request
 
 
 class Runner:
@@ -223,11 +223,15 @@ class Runner:
                         for index in range(rounds):
                             order = ["baseline", "candidate"] if index % 2 == 0 else ["candidate", "baseline"]
                             for request_index, request in enumerate(requests):
+                                # Expand once per pair, outside adapter timing. Keep the
+                                # compact descriptor in artifacts and send identical
+                                # ordinary seeds arrays to both existing executables.
+                                expanded = expand_seed_request(request) if sessions else None
                                 for variant in order:
                                     self.check()
                                     cmd = step["commands"][variant]
                                     if sessions:
-                                        result = sessions[variant].request(request, cmd["timeout_seconds"])
+                                        result = sessions[variant].request(expanded, cmd["timeout_seconds"])
                                     else:
                                         suffix = f"w{workers}-{phase}-{index}"
                                         sampled = self.sample_command(cmd, suffix)
