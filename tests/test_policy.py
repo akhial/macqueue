@@ -95,6 +95,14 @@ class PolicyTests(unittest.TestCase):
         basic = Policy({"rust_toolchain": "/toolchain", "cargo_home": "/cargo", "projects": {"seedfinder": "/mirror"}})
         with self.assertRaises(Invalid):
             basic.validate(pgo("seedfinder", "a" * 40, query={}, seeds=[1]))
+        provision = {'version': 1, 'project': 'seedfinder', 'sources': {'candidate': 'a'*40},
+                     'steps': [{'id': 'provision', 'op': 'provision', 'sha256': 'b'*64}]}
+        with self.assertRaisesRegex(Invalid, 'source-provision'):
+            basic.validate(provision)
+        Policy({**basic.config, 'capabilities': ['cargo', 'source-provision']}).validate(provision)
+        provision['steps'].append({'id': 'later', 'op': 'metadata'})
+        with self.assertRaisesRegex(Invalid, 'separate job'):
+            validate_job(provision)
         self.job["project"] = "unapproved"
         with self.assertRaises(Invalid):
             basic.validate(self.job)

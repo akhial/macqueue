@@ -8,6 +8,7 @@ TARGET = "aarch64-apple-darwin"
 MAX_JOB_BYTES = 32 * 1024 * 1024
 MAX_EXPLICIT_SEEDS = 1048576
 MAX_RANGE_SEEDS = 1048576
+MAX_INPUT_BYTES = 512 * 1024 * 1024
 
 
 def seed_request(value, *, allow_range=True):
@@ -108,6 +109,10 @@ def validate_job(job):
             command(step["command"])
         elif op == "metadata":
             keys(step, base)
+        elif op in ("provision", "revoke-source"):
+            keys(step, (*base, "sha256"))
+            require(isinstance(step["sha256"], str) and re.fullmatch(r"[a-f0-9]{64}", step["sha256"]), "invalid source package SHA-256")
+            require(len(job["steps"]) == 1, "source provisioning/revocation must be a separate job")
         elif op == "mkdir":
             keys(step, (*base, "path"))
             relative(step["path"])

@@ -17,7 +17,7 @@ class Policy:
     def __init__(self, config):
         self.config = config
         self.capabilities = set(config.get("capabilities", ["cargo", "benchmark", "inspect"]))
-        require(self.capabilities <= {"cargo", "benchmark", "inspect", "profiling", "profiling-build", "sample", "xctrace", "pgo"}, "unknown capability")
+        require(self.capabilities <= {"cargo", "benchmark", "inspect", "profiling", "profiling-build", "sample", "xctrace", "pgo", "source-provision"}, "unknown capability")
         self.toolchain = Path(config["rust_toolchain"]).resolve()
         self.tools = {
             "cargo": self.toolchain / "bin/cargo", "rustc": self.toolchain / "bin/rustc",
@@ -53,7 +53,10 @@ class Policy:
         validate_job(spec)
         require(spec["project"] in self.config["projects"], "project is not allowlisted on this worker")
         for step in spec["steps"]:
-            if step["op"] == "exec":
+            if step["op"] in ("provision", "revoke-source"):
+                self.capability("source-provision")
+                self.capability("cargo")
+            elif step["op"] == "exec":
                 self.command(step["command"])
             elif step["op"] == "compare":
                 self.capability("benchmark")

@@ -1,9 +1,11 @@
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location('update', Path(__file__).resolve().parents[1] / 'deploy/update.py')
 update = importlib.util.module_from_spec(spec)
@@ -60,3 +62,39 @@ class UpdateTests(unittest.TestCase):
         target.write_bytes(b'x = 1\n')
         self.updater.rollback(receipt)
         self.assertEqual(b'x = 1\n', target.read_bytes())
+
+    def test_mac_source_update_preserves_existing_capabilities_and_rolls_back_new_files(self):
+        self.updater.mac = True
+        self.updater.app = self.updater.base / 'app'
+        self.updater.app.mkdir()
+        self.updater.installation.update(uid=450, gid=450, python='/test/python')
+        state = self.updater.base / 'state'
+        state.mkdir()
+        self.updater.paused = state / 'PAUSED'
+        config = self.updater.base / 'config/worker.json'
+        config.parent.mkdir()
+        previous = {'capabilities': ['cargo', 'benchmark', 'inspect', 'pgo', 'profiling-build'], 'token_file': '/private/worker.token'}
+        config.write_text(json.dumps(previous))
+        before = config.read_bytes()
+        report = state / 'source-probe/report.json'
+        report.parent.mkdir()
+        report.write_text(json.dumps({'sandbox': True, 'enable': ['source-provision']}))
+        stage = self.root / 'source-stage'
+        (stage / 'files').mkdir(parents=True)
+        (stage / 'files/source-probe.py').write_text('pass\n')
+        (stage / 'source-probe.tar.gz').write_bytes(b'probe fixture')
+        plan = {'platform': 'macos', 'files': {'source-probe.py': {'before': None, 'after': update.current(stage / 'files/source-probe.py')}},
+                'probe': {'kind': 'source-provision', 'commit': 'a'*40, 'sha256': update.current(stage / 'source-probe.tar.gz')}}
+        (stage / 'plan.json').write_text(json.dumps(plan))
+        attrs = {'IsHidden': 'IsHidden: 1', 'UserShell': 'UserShell: /usr/bin/false',
+                 'AuthenticationAuthority': 'DisabledUser', 'dsAttrTypeNative:accountPolicyData': 'FALSEPREDICATE'}
+        with patch.object(update.subprocess, 'run', side_effect=lambda argv, **kw: SimpleNamespace(stdout=attrs[argv[-1]])), \
+             patch.object(update.subprocess, 'Popen', return_value=SimpleNamespace(stdout=io.StringIO('ROLLOUT_REPORT=' + str(report) + '\n'), wait=lambda: 0)):
+            self.updater.apply(stage)
+        current = json.loads(config.read_text())
+        self.assertEqual([*previous['capabilities'], 'source-provision'], current['capabilities'])
+        self.assertEqual(previous['token_file'], current['token_file'])
+        receipt = next((self.updater.base / 'updates').glob('*/receipt.json'))
+        self.updater.rollback(receipt)
+        self.assertEqual(before, config.read_bytes())
+        self.assertFalse((self.updater.app / 'source-probe.py').exists())

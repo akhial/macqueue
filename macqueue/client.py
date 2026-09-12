@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .common import digest, json_bytes, require
-from .schema import MAX_JOB_BYTES
+from .schema import MAX_INPUT_BYTES, MAX_JOB_BYTES
 
 
 class RemoteError(RuntimeError):
@@ -64,6 +64,45 @@ class Client:
                 if response.status >= 300:
                     raise RemoteError(response.status, result.get("error", "upload failed"))
                 return result
+        finally:
+            connection.close()
+
+    def upload_input(self, path):
+        path = Path(path)
+        require(0 < path.stat().st_size <= MAX_INPUT_BYTES, "source package exceeds 512 MiB")
+        sha = digest(path)
+        connection = self.connection(timeout=120)
+        try:
+            with path.open("rb") as stream:
+                connection.request("PUT", "/v1/inputs/" + sha, body=stream, headers={
+                    "Authorization": "Bearer " + self.token, "Content-Length": str(path.stat().st_size),
+                    "Content-Type": "application/gzip"})
+                response = connection.getresponse()
+                result = json.loads(response.read(65536))
+                if response.status >= 300:
+                    raise RemoteError(response.status, result.get("error", "upload failed"))
+                require(result["sha256"] == sha, "source upload identity mismatch")
+                return result
+        finally:
+            connection.close()
+
+    def download_input(self, sha, destination, job_id, lease, check):
+        connection = self.connection(timeout=20)
+        try:
+            connection.request("GET", "/v1/worker/inputs/" + sha, headers={
+                "Authorization": "Bearer " + self.token, "X-Job-ID": job_id, "X-Job-Lease": lease})
+            response = connection.getresponse()
+            if response.status != 200:
+                raise RemoteError(response.status, response.read(65536).decode(errors="replace"))
+            actual, total = hashlib.sha256(), 0
+            with Path(destination).open("xb") as stream:
+                while data := response.read(1024 * 1024):
+                    check()
+                    total += len(data)
+                    require(total <= MAX_INPUT_BYTES, "source download exceeds 512 MiB")
+                    actual.update(data)
+                    stream.write(data)
+            require(actual.hexdigest() == sha, "downloaded source package checksum mismatch")
         finally:
             connection.close()
 

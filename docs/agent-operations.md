@@ -1,5 +1,13 @@
 # Operating Macqueue from the optimization agent
 
+For future revisions, use [self-service provisioning](self-service-provisioning.md):
+
+```sh
+macqueue provision --candidate FULL_CANDIDATE_SHA --baseline FULL_BASELINE_SHA
+```
+
+After its job succeeds, submit ordinary correctness/comparison jobs with those SHAs. No operator handoff is needed for committed source or crates.io dependency changes. The provisioning job result is authoritative for new imports; the readiness JSON is an operator snapshot. One-time enablement is tracked in `.state/selfserve-status.json`.
+
 On `devbox`, the `macqueue` CLI is already on PATH. It uses the private queue at
 `http://100.102.112.115:8787` and the submitter token in
 `/home/adel/.config/macqueue/submit.token`. Do not print that token. The installed

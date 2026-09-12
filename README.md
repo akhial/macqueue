@@ -11,6 +11,7 @@ Included:
 - Warmups and alternating AB/BA benchmark samples at 1, performance-core, and available-core counts. Persistent JSON-lines sessions keep one request active at a time.
 - Formatting, Clippy, workspace tests, and focused core tests.
 - Optional profiling, executable inspection, and PGO using tools bundled with the pinned Rust toolchain.
+- [Self-service source and offline dependency provisioning](docs/self-service-provisioning.md) from the VPS, without macOS administrator access for agents.
 - Explicit argv, working directory, environment, stdin, timeouts, and output paths. No remote shell, Python snippets, arbitrary executables, fetch URLs, or PIDs.
 - Durable queue state, idempotent submissions, cancellation, worker leases, queue expiry, bounded output, local pause, and artifact downloads with checksum verification.
 - macOS sandbox checks before polling; a process group for each launched command.

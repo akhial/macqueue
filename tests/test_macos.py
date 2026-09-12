@@ -15,11 +15,68 @@ from macqueue.runner import Runner, pack_artifacts
 from macqueue.server import Server
 from macqueue.store import Store
 from macqueue.worker import Worker
+from macqueue.client import Client
+from macqueue.common import Invalid, digest
+from macqueue.source_build import build_package
+from macqueue.sources import catalog, lookup
 
 
 @unittest.skipUnless(platform.system() == "Darwin" and platform.machine() == "arm64" and shutil.which("rustc"),
                      "requires Apple Silicon and an installed Rust toolchain")
 class MacOSIntegrationTests(unittest.TestCase):
+    def test_self_service_provision_build_and_revoke_without_host_mirror_changes(self):
+        bundle, archive = self.base / 'self-service.bundle', self.base / 'self-service.tar.gz'
+        subprocess.run(['/usr/bin/git', '-C', str(self.source), 'bundle', 'create', str(bundle), '--all'], check=True, capture_output=True)
+        build_package(bundle, 'seedfinder', [self.sha], archive, self.base / 'vendor-cargo', Path(self.toolchain) / 'bin/cargo')
+        sha = digest(archive)
+        config = {**self.config, 'capabilities': ['cargo', 'benchmark', 'source-provision']}
+        # Empty operator mirror proves the later build uses the imported source.
+        empty = self.base / 'empty-mirror'
+        subprocess.run(['/usr/bin/git', 'init', '--bare', str(empty)], check=True, capture_output=True)
+        config['projects'] = {'seedfinder': str(empty)}
+        before = {str(p.relative_to(empty)): digest(p) for p in empty.rglob('*') if p.is_file()}
+        spec = {'version': 1, 'project': 'seedfinder', 'sources': {'candidate': self.sha},
+                'steps': [{'id': 'provision', 'op': 'provision', 'sha256': sha}]}
+        policy = Policy(config)
+        store = Store(self.base / 'source-queue')
+        server = Server(('127.0.0.1', 0), store, 's'*48, 'w'*48)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        token = self.base / 'source-worker.token'
+        token.write_text('w'*48)
+        token.chmod(0o600)
+        worker_config = {**config, 'server_url': f'http://127.0.0.1:{server.server_port}',
+                         'worker_id': 'source-fixture', 'token_file': str(token)}
+        try:
+            submit = Client(worker_config['server_url'], 's'*48)
+            self.assertEqual(sha, submit.upload_input(archive)['sha256'])
+            submitted = submit.request('POST', '/v1/jobs', spec, key='source-integration')
+            worker = Worker(worker_config)
+            claim = worker.client.request('POST', '/v1/worker/claim', {'worker': 'source-fixture', 'projects': ['seedfinder']})
+            claim['requested_at'] = __import__('time').monotonic()
+            worker.handle(claim)
+            finished = submit.request('GET', '/v1/jobs/' + submitted['id'])
+            self.assertEqual('succeeded', finished['status'], finished['result'])
+            self.assertEqual(sha, finished['result']['source_provisioning']['sha256'])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+        snapshot = lookup(policy, 'seedfinder', self.sha)
+        self.assertTrue(snapshot.is_dir())
+        check = correctness('seedfinder', self.sha, 'smoke')
+        runner = Runner(policy, self.base / 'self-service-check', check, threading.Event())
+        runner.run()
+        with self.assertRaises(Invalid):
+            runner.internal(['/bin/chmod', 'u+w', str(snapshot / 'source.bundle')], label='deny-snapshot-write')
+        metadata = json.loads((runner.root / 'artifacts/environment-after.json').read_text())
+        self.assertEqual({'candidate': sha}, metadata['source_packages'])
+        spec['steps'][0]['op'] = 'revoke-source'
+        Runner(policy, self.base / 'self-service-revoke', spec, threading.Event()).run()
+        self.assertIsNone(lookup(policy, 'seedfinder', self.sha))
+        self.assertEqual(before, {str(p.relative_to(empty)): digest(p) for p in empty.rglob('*') if p.is_file()})
+        self.assertTrue(archive.is_file())
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()

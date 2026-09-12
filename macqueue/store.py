@@ -188,4 +188,12 @@ class Store:
                 if row["artifact"]:
                     (self.directory / row["artifact"]).unlink(missing_ok=True)
                 db.execute("DELETE FROM jobs WHERE id=?", (row["id"],))
+            referenced = set()
+            for row in db.execute("SELECT spec FROM jobs"):
+                for step in json.loads(row['spec'])['steps']:
+                    if step['op'] in ('provision', 'revoke-source'):
+                        referenced.add(step['sha256'])
+            for path in (self.directory / 'inputs').glob('*.tar.gz'):
+                if path.name[:-7] not in referenced and path.stat().st_mtime < time.time() - days * 86400:
+                    path.unlink()
             return len(rows)

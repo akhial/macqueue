@@ -1,5 +1,7 @@
 # HTTP API
 
+Source package transport uses `PUT /v1/inputs/SHA256` with a submitter token (512 MiB binary body limit). The worker downloads with `GET /v1/worker/inputs/SHA256`, its worker token, `X-Job-ID`, and `X-Job-Lease`; the active lease must reference that package in a `provision` job. Uploaded packages are immutable. See [self-service provisioning](self-service-provisioning.md).
+
 All routes except `GET /healthz` require `Authorization: Bearer TOKEN`. Tokens are separate for submitters and workers. They are never accepted in URLs. The service is for a private network or authenticated HTTPS reverse proxy, not unauthenticated public hosting.
 
 Job submission bodies may be at most 32 MiB; other JSON request bodies remain capped at 1 MiB. Client responses carrying jobs allow 33 MiB to include queue metadata. Artifact bodies have a configurable limit, default 512 MiB. Requests must use `Content-Length`; chunked uploads are not supported. Errors are JSON: `{"error":"message"}`. Missing/bad authentication returns 401, unknown routes/jobs 404, validation or stale lease failures 400. Clients should retry transport/5xx failures, using the same submission key or lease. A 4xx failure needs attention rather than a blind retry.

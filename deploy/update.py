@@ -54,7 +54,7 @@ class Update:
         self.lock = None
 
     def target(self, name):
-        require(bool(re.fullmatch(r'macqueue/[a-z_]+\.py', name)) or name in ('agent.py', 'rollout-probe.py', 'config/worker.json'), 'invalid update target')
+        require(bool(re.fullmatch(r'macqueue/[a-z_]+\.py', name)) or name in ('agent.py', 'rollout-probe.py', 'source-probe.py', 'config/worker.json'), 'invalid update target')
         if name == 'config/worker.json':
             require(self.mac, 'worker config is Mac-only')
             return self.base / name
@@ -138,6 +138,8 @@ class Update:
             payloads[name] = source.read_bytes()
             compile(payloads[name], name, 'exec')
         if self.mac:
+            if plan['probe'].get('kind') == 'source-provision':
+                require(current(stage / 'source-probe.tar.gz') == plan['probe']['sha256'], 'source probe package changed')
             for attribute, expected in (('IsHidden', 'IsHidden: 1'), ('UserShell', 'UserShell: /usr/bin/false'),
                                         ('AuthenticationAuthority', 'DisabledUser'), ('dsAttrTypeNative:accountPolicyData', 'FALSEPREDICATE')):
                 result = subprocess.run(['/usr/bin/dscl', '.', '-read', '/Users/_macqueue', attribute],
@@ -172,23 +174,39 @@ class Update:
                 replace(self.target(name), data, item['uid'], item['gid'], item['mode'])
             if self.mac:
                 probe = plan['probe']
+                source_probe = probe.get('kind') == 'source-provision'
+                input_path = None
+                if source_probe:
+                    input_path = self.base / 'state' / ('probe-input-' + uuid.uuid4().hex + '.tar.gz')
+                    shutil.copyfile(stage / 'source-probe.tar.gz', input_path)
+                    os.chown(input_path, 0, self.installation['gid'])
+                    input_path.chmod(0o640)
+                    require(current(input_path) == probe['sha256'], 'copied source package changed')
+                    probe_args = [str(self.app / 'source-probe.py'), '--input', str(input_path),
+                                  '--sha256', probe['sha256'], '--commit', probe['commit']]
+                else:
+                    probe_args = [str(self.app / 'rollout-probe.py'), '--commit', probe['commit'], '--profile-sha256', probe['profile_sha256']]
                 argv = ['/usr/bin/sudo', '-u', '_macqueue', '--', '/usr/bin/env', '-i',
                         'HOME=/Library/Macqueue/home', 'PATH=/usr/bin:/bin:/usr/sbin:/sbin',
-                        self.installation['python'], '-I', '-B', str(self.app / 'rollout-probe.py'),
-                        '--commit', probe['commit'], '--profile-sha256', probe['profile_sha256']]
+                        self.installation['python'], '-I', '-B', *probe_args]
                 child = subprocess.Popen(argv, text=True, stdout=subprocess.PIPE)
                 report_path = None
                 for line in child.stdout:
                     print(line, end='', flush=True)
                     if line.startswith('ROLLOUT_REPORT='):
                         report_path = Path(line.strip().split('=', 1)[1])
-                require(child.wait() == 0 and report_path is not None, 'local probes did not complete; use rollback receipt')
+                code = child.wait()
+                if input_path:
+                    input_path.unlink()
+                require(code == 0 and report_path is not None, 'local probes did not complete; use rollback receipt')
                 require(report_path.resolve().is_relative_to(self.base / 'state'), 'unexpected probe report path')
                 report = json.loads(report_path.read_text())
-                require(report['sandbox'] is True and set(report['enable']) <= {'pgo', 'profiling-build', 'sample', 'xctrace'}, 'invalid probe report')
+                expected = {'source-provision'} if source_probe else {'pgo', 'profiling-build', 'sample', 'xctrace'}
+                require(report['sandbox'] is True and set(report['enable']) <= expected, 'invalid probe report')
                 config_path = self.target('config/worker.json')
                 config = json.loads(config_path.read_text())
-                require(set(config.get('capabilities', [])) <= {'cargo', 'benchmark', 'inspect'}, 'optional capabilities were already configured; review this rollout')
+                if not source_probe:
+                    require(set(config.get('capabilities', [])) <= {'cargo', 'benchmark', 'inspect'}, 'optional capabilities were already configured; review this rollout')
                 config['capabilities'] = list(dict.fromkeys([*config['capabilities'], *report['enable']]))
                 config['max_output_bytes'] = 256 * 1024 * 1024
                 data = json.dumps(config, indent=2).encode() + b'\n'

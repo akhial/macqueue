@@ -1,5 +1,7 @@
 # Structured job format
 
+A locally enabled `source-provision` capability also accepts single-step `provision` and `revoke-source` jobs, with a `sha256` field identifying an uploaded source package. They use the normal project/full-SHA `sources` fields, queue, deadlines, cancellation and artifacts. They cannot be mixed with execution steps. The installed VPS `macqueue provision` command builds and submits these jobs; see [self-service provisioning](self-service-provisioning.md).
+
 `macqueue plan` generates complete jobs. All fields are validated again on the Mac. Unknown keys and operations are rejected. This is not a generic command-execution API.
 
 ```json

@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .common import Invalid, integer, json_bytes, keys, name, require
-from .schema import MAX_JOB_BYTES, validate_job
+from .schema import MAX_INPUT_BYTES, MAX_JOB_BYTES, validate_job
 from .store import Store
 
 MAX_ARTIFACT = 512 * 1024 * 1024
@@ -27,6 +27,8 @@ class Server(ThreadingHTTPServer):
         self.tokens = {"submit": submit_token, "worker": worker_token}
         self.max_artifact = max_artifact
         self.changed = threading.Condition()
+        self.input_lock = threading.Lock()
+        self.input_reserved = 0
 
     def wake(self):
         with self.changed:
@@ -93,6 +95,64 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(401, {"error": "unauthorized"})
                 return
             store = self.server.store
+            package = re.fullmatch(r"/v1/(worker/)?inputs/([a-f0-9]{64})", path)
+            if package:
+                worker, sha = package.groups()
+                directory = store.directory / "inputs"
+                directory.mkdir(mode=0o700, exist_ok=True)
+                destination = directory / (sha + ".tar.gz")
+                if not worker and method == "PUT":
+                    count = self.length(MAX_INPUT_BYTES)
+                    require(count > 0, "empty source package")
+                    with self.server.input_lock:
+                        files = list(directory.iterdir())
+                        require(len(files) < 1000, "source upload count budget exceeded")
+                        require(sum(p.stat().st_size for p in files) + self.server.input_reserved + count <= 16 * 1024**3, "source upload storage budget exceeded")
+                        self.server.input_reserved += count
+                    temp = directory / (sha + "." + secrets.token_hex(8) + ".upload")
+                    actual = hashlib.sha256()
+                    try:
+                        with temp.open("xb") as stream:
+                            remaining = count
+                            while remaining:
+                                data = self.rfile.read(min(1024 * 1024, remaining))
+                                require(data, "truncated source package")
+                                stream.write(data)
+                                actual.update(data)
+                                remaining -= len(data)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        require(actual.hexdigest() == sha, "source package checksum mismatch")
+                        # Publication is immutable and idempotent by content hash.
+                        try:
+                            os.link(temp, destination)
+                        except FileExistsError:
+                            pass
+                        self.reply(200, {"sha256": sha, "bytes": count})
+                    finally:
+                        temp.unlink(missing_ok=True)
+                        with self.server.input_lock:
+                            self.server.input_reserved -= count
+                    return
+                if worker and method == "GET":
+                    job_id = self.headers.get("X-Job-ID", "")
+                    with store.transaction() as db:
+                        row = store.owned(db, job_id, self.headers.get("X-Job-Lease", ""))
+                        spec = json.loads(row["spec"])
+                        require(len(spec["steps"]) == 1 and spec["steps"][0]["op"] == "provision"
+                                and spec["steps"][0]["sha256"] == sha, "input does not belong to this provisioning lease")
+                    require(destination.is_file(), "source package has not been uploaded")
+                    with destination.open("rb") as stream:
+                        self.send_response(200)
+                        self.send_header("Content-Length", str(os.fstat(stream.fileno()).st_size))
+                        self.send_header("X-Input-SHA256", sha)
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        while data := stream.read(1024 * 1024):
+                            self.wfile.write(data)
+                    self.close_connection = True
+                    return
+                raise KeyError("route not found")
             if path == "/v1/jobs":
                 if method == "POST":
                     spec = validate_job(self.body(MAX_JOB_BYTES))

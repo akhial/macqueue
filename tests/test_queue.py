@@ -82,6 +82,27 @@ class QueueTests(unittest.TestCase):
 
 
 class HTTPTests(unittest.TestCase):
+    def test_source_upload_download_requires_the_matching_worker_lease(self):
+        from macqueue.common import digest
+        source = Path(self.temp.name) / 'source.tar.gz'
+        source.write_bytes(b'bounded source package')
+        sha = self.submit.upload_input(source)['sha256']
+        spec = {'version': 1, 'project': 'seedfinder', 'sources': {'candidate': 'a'*40},
+                'steps': [{'id': 'provision', 'op': 'provision', 'sha256': sha}]}
+        submitted = self.submit.request('POST', '/v1/jobs', spec, key='source')
+        claim = self.worker.request('POST', '/v1/worker/claim', {'worker': 'mac', 'projects': ['seedfinder']})
+        target = Path(self.temp.name) / 'download'
+        self.worker.download_input(sha, target, submitted['id'], claim['lease'], lambda: None)
+        self.assertEqual(digest(source), digest(target))
+        with self.assertRaises(RemoteError):
+            self.submit.download_input(sha, target.with_name('wrong-role'), submitted['id'], claim['lease'], lambda: None)
+        with self.assertRaises(RemoteError):
+            self.worker.download_input('f'*64, target.with_name('wrong-input'), submitted['id'], claim['lease'], lambda: None)
+        with self.assertRaises(RemoteError):
+            self.worker.upload_input(source)
+        # Retrying the upload returns the same content identity without replacing it.
+        self.assertEqual(sha, self.submit.upload_input(source)['sha256'])
+
     def test_compact_million_seed_request_survives_submit_and_claim(self):
         from macqueue.plans import benchmark
         spec = benchmark('seedfinder', 'a'*40, 'b'*40, query={}, seed_range={'start': 0, 'count': 1048576})

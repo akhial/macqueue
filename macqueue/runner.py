@@ -13,7 +13,7 @@ from .schema import TARGET, expand_seed_request
 
 
 class Runner:
-    def __init__(self, policy, root, spec, cancel, event=lambda _: None, *, sandboxed=True):
+    def __init__(self, policy, root, spec, cancel, event=lambda _: None, *, sandboxed=True, download_input=None):
         self.policy, self.root, self.spec = policy, Path(root).resolve(), spec
         self.cancel, self.event = cancel, event
         self.sandboxed = sandboxed
@@ -21,6 +21,11 @@ class Runner:
         self.sequence = 0
         self.frozen = {}
         self.cores = {}
+        self.download_input = download_input
+        self.source_inputs = {}
+        self.checkouts = set()
+        self.provision_data = None
+        self.source_result = None
 
     def check(self):
         if self.cancel.is_set():
@@ -48,7 +53,11 @@ class Runner:
         cwd = self.path(cmd["cwd"], exists=True)
         require(cwd.is_dir(), "cwd must be a directory")
         env = self.policy.environment(self.root, cmd["env"])
-        sandbox = self.policy.sandbox(self.root, extra_read=extra_read, writable=[stdout, stderr, *writable]) if self.sandboxed else None
+        variant = cmd['cwd'].removeprefix('work/checkouts/')
+        if variant in self.source_inputs:
+            env['CARGO_HOME'] = str(self.path('work/cargo/' + variant))
+        input_roots = list(set(self.source_inputs.values()))
+        sandbox = self.policy.sandbox(self.root, extra_read=[*extra_read, *input_roots], writable=[stdout, stderr, *writable]) if self.sandboxed else None
         self.event({"event": "command", "argv": argv, "cwd": cmd["cwd"], "env": cmd["env"],
                     "stdout": cmd["stdout"], "stderr": cmd["stderr"]})
         deadline = self.deadline if persistent else min(self.deadline, time.monotonic() + cmd["timeout_seconds"])
@@ -74,6 +83,21 @@ class Runner:
                           "artifacts/frozen", "artifacts/internal"):
             self.path(directory).mkdir(parents=True, exist_ok=True)
         self.write("artifacts/job.json", json_bytes(self.spec))
+        from .sources import cargo_config, lock_identity, lookup, unpack
+        operation = self.spec['steps'][0]
+        if operation['op'] == 'revoke-source':
+            self.metadata('before')
+            return
+        if operation['op'] == 'provision':
+            require(self.download_input is not None, 'source download is unavailable')
+            archive = self.path('work/source.tar.gz')
+            self.download_input(operation['sha256'], archive, self.check)
+            require(digest(archive) == operation['sha256'], 'source archive identity mismatch')
+            imported = self.path('work/import')
+            manifest = unpack(archive, imported, self.check)
+            require(manifest['project'] == self.spec['project'] and set(manifest['revisions']) == set(self.spec['sources'].values()),
+                    'package project/revisions differ from the requested job')
+            self.provision_data = imported, manifest, operation['sha256']
         mirror = Path(self.policy.config["projects"][self.spec["project"]]).resolve()
         require(mirror.is_dir(), "configured repository mirror does not exist")
         # Git's upload-pack subprocess discards command-scoped safe.directory.
@@ -83,17 +107,27 @@ class Runner:
                    json.dumps(str(mirror), ensure_ascii=False) + "\n").encode())
         git = str(self.policy.tools["git"])
         for variant, sha in self.spec["sources"].items():
+            source = self.provision_data[0] if self.provision_data else lookup(self.policy, self.spec['project'], sha)
+            if source:
+                self.source_inputs[variant] = source
+                self.path('work/cargo/' + variant).mkdir(parents=True)
+                self.write('work/cargo/' + variant + '/config.toml', cargo_config(source / 'vendor').encode())
+            clone_from = source / 'source.bundle' if source else mirror
             # No remote URL, fetch, hooks, submodule update, or arbitrary revision expression.
             self.internal([git, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clone",
                            "--no-local", "--no-checkout", "--config", "core.hooksPath=/dev/null",
-                           "--config", "core.fsmonitor=false", str(mirror), str(self.path(f"work/checkouts/{variant}"))],
-                          label=f"clone-{variant}", extra_read=[mirror],
+                           "--config", "core.fsmonitor=false", str(clone_from), str(self.path(f"work/checkouts/{variant}"))],
+                          label=f"clone-{variant}", extra_read=[clone_from],
                           env={"GIT_CONFIG_GLOBAL": "${JOB}/work/mirror.gitconfig"})
             cwd = f"work/checkouts/{variant}"
             actual = self.internal([git, "rev-parse", "--verify", sha + "^{commit}"], cwd=cwd, label=f"resolve-{variant}").strip()
             require(actual.lower() == sha.lower(), "requested revision is not an exact commit")
             self.internal([git, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout", "--detach", sha],
                           cwd=cwd, label=f"checkout-{variant}")
+            self.checkouts.add(variant)
+            if source:
+                manifest = self.provision_data[1] if self.provision_data else json.loads((source / 'manifest.json').read_text())
+                require(lock_identity(self.path(cwd)) == manifest['revisions'][sha], 'source lockfile does not match the package')
         self.metadata("before")
 
     def metadata(self, label):
@@ -118,7 +152,11 @@ class Runner:
                 self.cores[key] = int(info[field])
         git = str(self.policy.tools["git"])
         info["sources"] = {}
+        info['source_packages'] = {variant: (self.provision_data[2] if self.provision_data else path.name)
+                                   for variant, path in self.source_inputs.items()}
         for variant in self.spec["sources"]:
+            if variant not in self.checkouts:
+                continue
             cwd = f"work/checkouts/{variant}"
             info["sources"][variant] = {
                 "commit": self.internal([git, "rev-parse", "HEAD"], cwd=cwd, label=f"head-{variant}").strip(),
@@ -327,7 +365,30 @@ class Runner:
             self.check()
             self.event({"event": "step_started", "step": step["id"], "op": step["op"]})
             op = step["op"]
-            if op == "exec":
+            if op == 'provision':
+                from .sources import lock_identity, publish
+                imported, manifest, sha = self.provision_data
+                for variant, commit in self.spec['sources'].items():
+                    cwd = 'work/checkouts/' + variant
+                    self.internal([str(self.policy.tools['cargo']), 'metadata', '--locked', '--offline', '--format-version', '1'],
+                                  cwd=cwd, label='offline-metadata-' + variant, timeout=300)
+                    require(lock_identity(self.path(cwd)) == manifest['revisions'][commit], 'offline resolution changed the lockfile')
+                self.source_result = publish(self, imported, manifest, sha)
+                # Publication moved the vendor directory. Resolve it at the new path
+                # for metadata and future jobs; checkouts are disposable per job.
+                from .sources import cargo_config, catalog
+                installed = catalog(self.policy) / self.spec['project'] / sha
+                for variant in self.source_inputs:
+                    self.source_inputs[variant] = installed
+                    self.path('work/cargo/' + variant + '/config.toml').write_text(cargo_config(installed / 'vendor'))
+                self.write('artifacts/provision.json', json_bytes(self.source_result))
+            elif op == 'revoke-source':
+                from .sources import catalog, remove_snapshot
+                snapshot = safe_path(catalog(self.policy), self.spec['project'] + '/' + step['sha256'])
+                remove_snapshot(snapshot)
+                self.source_result = {'revoked': step['sha256'], 'project': self.spec['project']}
+                self.write('artifacts/revocation.json', json_bytes(self.source_result))
+            elif op == "exec":
                 cmd = step["command"]
                 writable = []
                 if cmd["argv"][:3] == ["xcrun", "xctrace", "export"]:
@@ -358,7 +419,10 @@ class Runner:
                 self.pgo_merge(step)
             self.event({"event": "step_finished", "step": step["id"]})
         self.metadata("after")
-        return {"frozen": self.frozen, "steps_completed": len(self.spec["steps"])}
+        result = {"frozen": self.frozen, "steps_completed": len(self.spec["steps"])}
+        if self.source_result:
+            result['source_provisioning'] = self.source_result
+        return result
 
 
 def pack_artifacts(root, destination, max_bytes=512 * 1024 * 1024):

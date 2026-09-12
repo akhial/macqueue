@@ -229,7 +229,9 @@ class Worker:
         guard.start()
         result, status = {}, "failed"
         try:
-            runner = Runner(self.policy, root, claim["job"]["spec"], lease.cancel, lease.event)
+            runner = Runner(self.policy, root, claim["job"]["spec"], lease.cancel, lease.event,
+                            download_input=lambda sha, destination, check: self.client.download_input(
+                                sha, destination, job_id, claim['lease'], check))
             result = runner.run()
             status = "succeeded"
         except Exception as exc:
