@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "macqueue"
+version = "0.1.0"
+description = "A pull-based queue for constrained macOS Cargo and benchmark jobs"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+macqueue = "macqueue.cli:main"
+
+[tool.setuptools]
+packages = ["macqueue"]
+

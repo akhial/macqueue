@@ -1,0 +1,9 @@
+# Optional HTTPS front end on the VPS. Replace the hostname and configure DNS.
+# Restrict network access to your tailnet with the VPS firewall/Tailscale policy.
+macqueue.example.com {
+    request_body {
+        max_size 512MB
+    }
+    reverse_proxy 127.0.0.1:8787
+}
+

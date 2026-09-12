@@ -1,0 +1,30 @@
+[Unit]
+Description=Macqueue VPS pull-worker queue
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=macqueue
+Group=macqueue
+WorkingDirectory=/opt/macqueue
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m macqueue server --state /var/lib/macqueue --host 127.0.0.1 --port 8787 --submit-token-file /etc/macqueue/submit.token --worker-token-file /etc/macqueue/worker.token
+Restart=on-failure
+RestartSec=5
+StateDirectory=macqueue
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/macqueue
+
+[Install]
+WantedBy=multi-user.target
+

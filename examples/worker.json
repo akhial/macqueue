@@ -1,0 +1,20 @@
+{
+  "server_url": "http://100.100.100.100:8787",
+  "allow_http": true,
+  "token_file": "/Users/macworker/.config/macqueue/worker.token",
+  "worker_id": "macbook-pro",
+  "state_dir": "/Users/macworker/macqueue-state",
+  "cargo_home": "/Users/macworker/macqueue-cargo",
+  "rust_toolchain": "/Users/macworker/.rustup/toolchains/1.98.0-aarch64-apple-darwin",
+  "projects": {
+    "seedfinder": "/Users/macworker/mirrors/seedfinder.git"
+  },
+  "capabilities": ["cargo", "benchmark", "inspect"],
+  "read_roots": [],
+  "deployment_target": "13.0",
+  "max_output_bytes": 33554432,
+  "max_artifact_bytes": 536870912,
+  "max_job_bytes": 21474836480,
+  "min_free_bytes": 5368709120
+}
+
