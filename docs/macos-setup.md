@@ -48,6 +48,10 @@ sudo tail -n 40 /Library/Macqueue/logs/worker.stderr.log
 
 Before accepting work, provision the real source mirror and dedicated offline Cargo cache, replace `server_url` in `config/worker.json`, and securely give the VPS the generated worker token (or replace it with the VPS worker token). Preserve token ownership `_macqueue:_macqueue` and mode 0600. Do not put a submitter credential on the Mac.
 
+Use the [reversible provisioning procedure](macos-provisioning.md) to stage exact
+revisions and locked dependencies, pair the VPS credential, and retain the previous
+mirror/cache/configuration for rollback.
+
 Restart after changing configuration:
 
 ```sh

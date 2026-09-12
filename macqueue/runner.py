@@ -75,13 +75,19 @@ class Runner:
         self.write("artifacts/job.json", json_bytes(self.spec))
         mirror = Path(self.policy.config["projects"][self.spec["project"]]).resolve()
         require(mirror.is_dir(), "configured repository mirror does not exist")
+        # Git's upload-pack subprocess discards command-scoped safe.directory.
+        # Give only these clone processes an isolated config naming the trusted,
+        # administrator-owned mirror. No user or system Git config is changed.
+        self.write("work/mirror.gitconfig", ("[safe]\n\tdirectory = " +
+                   json.dumps(str(mirror), ensure_ascii=False) + "\n").encode())
         git = str(self.policy.tools["git"])
         for variant, sha in self.spec["sources"].items():
             # No remote URL, fetch, hooks, submodule update, or arbitrary revision expression.
             self.internal([git, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clone",
-                           "--local", "--no-hardlinks", "--no-checkout", "--config", "core.hooksPath=/dev/null",
+                           "--no-local", "--no-checkout", "--config", "core.hooksPath=/dev/null",
                            "--config", "core.fsmonitor=false", str(mirror), str(self.path(f"work/checkouts/{variant}"))],
-                          label=f"clone-{variant}", extra_read=[mirror])
+                          label=f"clone-{variant}", extra_read=[mirror],
+                          env={"GIT_CONFIG_GLOBAL": "${JOB}/work/mirror.gitconfig"})
             cwd = f"work/checkouts/{variant}"
             actual = self.internal([git, "rev-parse", "--verify", sha + "^{commit}"], cwd=cwd, label=f"resolve-{variant}").strip()
             require(actual.lower() == sha.lower(), "requested revision is not an exact commit")

@@ -119,6 +119,9 @@ Only one worker instance may own a state directory. The VPS also allows only one
 
 ### 4. Agents submit reviewable JSON
 
+For the configured devbox CLI and source-provisioning handoff, read the
+[agent operations guide](docs/agent-operations.md).
+
 On the VPS, give agents the **submitter token**, not the worker token. The CLI is also a convenient agent tool interface:
 
 ```sh
