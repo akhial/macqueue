@@ -23,6 +23,10 @@ The built-in Seatbelt profile denies network access and restricts writes to each
 
 ### 1. VPS
 
+For Debian 13, use the [reversible installer and configured agent CLI](docs/debian-setup.md).
+It creates a separate systemd service, binds to the selected Tailscale address,
+and includes an ownership-checked rollback command. The manual setup below is an alternative.
+
 Copy this directory to `/opt/macqueue`. Run from that directory, or install with `python3 -m pip install .` in a virtual environment. Running `python3 -m macqueue` directly needs no package installation or network access.
 
 Create a service account and its private directories (example for a Linux system with `useradd`), then create credentials as that account:
@@ -89,6 +93,8 @@ git -C /Users/macworker/mirrors/seedfinder.git fetch --prune origin
 The worker accepts only exact full commit SHAs already in the mirror. It does not update submodules or download Git LFS objects. Provision repositories without those runtime dependencies, or extend the trusted provisioning process first.
 
 ### 3. Configure and start the Mac worker
+
+For a hidden account that cannot log in to a GUI, use the [reversible system LaunchDaemon installer](docs/macos-setup.md). It creates a disabled service identity, copies the toolchain outside your home, runs local checks, and starts paused. The manual LaunchAgent option below is for accounts that are allowed a graphical login.
 
 Copy this project to `/Users/macworker/macqueue`. Copy [examples/worker.json](examples/worker.json) to `/Users/macworker/.config/macqueue/worker.json` and replace the server address, account paths, project mirror, and toolchain path. Transfer **only `worker.token`** to the Mac's configured token path. Use a trusted existing transfer method; Mac SSH access is unnecessary.
 

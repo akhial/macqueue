@@ -292,6 +292,7 @@ class Worker:
         doctor(self.config)
         signal.signal(signal.SIGTERM, self.signal)
         signal.signal(signal.SIGINT, self.signal)
+        LOG.info("Worker %s ready; paused=%s", self.config["worker_id"], (self.state / "PAUSED").exists())
         while not self.stop.is_set():
             if (self.state / "PAUSED").exists():
                 if once:
