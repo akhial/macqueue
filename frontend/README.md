@@ -24,6 +24,43 @@ pnpm dev            # Bun API :8790 + vp dev :8791
 Or run `pnpm api` and `vp dev` in separate terminals. Both bind to loopback.
 `DASHBOARD_PORT` overrides the production port only.
 
+## Tailscale access
+
+This Mac uses `https://memo.komodo-spectrum.ts.net:8443`. Bun remains on loopback;
+Tailscale Serve handles private HTTPS access under the tailnet's existing policy.
+The dashboard process must be running. The existing Serve endpoint on 443 is separate.
+Clients need Tailscale and working MagicDNS resolution for the HTTPS name.
+
+Set the exact origin in `.env.local`, then restart `pnpm start`:
+
+```sh
+DASHBOARD_ORIGIN=https://memo.komodo-spectrum.ts.net:8443
+```
+
+Enable the private endpoint:
+
+```sh
+tailscale serve --bg --https=8443 http://127.0.0.1:8790
+```
+
+Undo just this endpoint:
+
+```sh
+tailscale serve --bg --https=8443 off
+```
+
+Remove `DASHBOARD_ORIGIN` and restart to return the app's origin allowlist to
+loopback only. Avoid `serve reset`, which would remove other Serve endpoints.
+Serve configuration persists; it does not start the Bun process. No Funnel is used.
+
+If a client's system DNS does not resolve the name, test the connection without
+changing DNS settings or disabling certificate checks:
+
+```sh
+curl --resolve memo.komodo-spectrum.ts.net:8443:100.90.178.109 \
+  https://memo.komodo-spectrum.ts.net:8443/api/jobs
+```
+
 ## Views
 
 - Latest 100 jobs from the existing API; counts cover that window.
@@ -59,7 +96,8 @@ SSH into that file, without printing it. Do not use the worker token. See
 The existing VPS has a submitter role, not a separate read-only role. The local
 Bun gateway enforces read-only access: fixed GET routes for list/detail/log/artifact;
 no forwarding of browser-supplied credentials, upstream URLs, writes or worker
-routes. It rejects foreign hosts/origins and cross-site API requests. Queue state,
+routes. It accepts loopback and the explicitly configured HTTPS origin, rejecting
+other hosts/origins and cross-site API requests. Queue state,
 service settings, worker permissions and source provisioning are managed separately.
 
 ## Checks
@@ -75,9 +113,10 @@ against the live API, on desktop and mobile layouts.
 
 ## Remove
 
-Stop the process and remove `frontend/` (including its ignored `.local/` credential,
-`node_modules/` and `dist/`). There is no daemon, account, port exposure or VPS
+Disable the dashboard's Serve endpoint if enabled. Stop the process and remove `frontend/` (including its ignored `.local/` credential,
+`node_modules/` and `dist/`). There is no dashboard daemon, account or VPS
 installation to undo. The queue and worker remain separate.
 
 Toolchain references: [Vite+](https://viteplus.dev/guide/),
 [Bun HTTP server](https://bun.sh/docs/runtime/http/server).
+[Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve).

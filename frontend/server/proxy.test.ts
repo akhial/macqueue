@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createReadOnlyProxy } from "./proxy.ts";
+import { createReadOnlyProxy, parseDashboardOrigin } from "./proxy.ts";
 
 const origin = "http://127.0.0.1:8790";
 const id = "a".repeat(32);
@@ -14,6 +14,42 @@ function setup(response = () => Response.json([])) {
   return { proxy, fetcher };
 }
 describe("read-only local gateway", () => {
+  it("accepts the configured HTTPS origin after TLS termination, without widening read access", async () => {
+    const publicOrigin = parseDashboardOrigin("https://memo.example.ts.net:8443");
+    const fetcher = vi.fn(async () => Response.json([]));
+    const proxy = createReadOnlyProxy({
+      upstream: "http://queue.internal:8787",
+      token: "private-test-token",
+      origins: [origin, publicOrigin],
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const forwarded = new Request("http://memo.example.ts.net:8443/api/jobs", {
+      headers: { Origin: publicOrigin, "Sec-Fetch-Site": "same-origin" },
+    });
+    expect((await proxy(forwarded)).status).toBe(200);
+    fetcher.mockClear();
+    for (const request of [
+      new Request("http://memo.example.ts.net:8443/api/jobs", { method: "POST" }),
+      new Request("http://memo.example.ts.net:8443/api/jobs", {
+        headers: { Origin: "https://other.example.ts.net:8443" },
+      }),
+      new Request("http://other.example.ts.net:8443/api/jobs", {
+        headers: { "X-Forwarded-Host": "memo.example.ts.net:8443" },
+      }),
+    ])
+      expect((await proxy(request)).status).toBeGreaterThanOrEqual(400);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each([
+    "http://memo.example.ts.net",
+    "https://user:password@memo.example.ts.net",
+    "https://memo.example.ts.net/jobs",
+    "https://memo.example.ts.net?anything",
+    "https://memo.example.ts.net#fragment",
+    "*",
+  ])("rejects unsafe configured origin %s", (value) => {
+    expect(() => parseDashboardOrigin(value)).toThrow();
+  });
   it.each(["POST", "PUT", "DELETE", "PATCH", "OPTIONS"])(
     "rejects %s without contacting queue",
     async (method) => {

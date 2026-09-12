@@ -1,6 +1,6 @@
 import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createReadOnlyProxy, jsonError } from "./proxy.ts";
+import { createReadOnlyProxy, jsonError, parseDashboardOrigin } from "./proxy.ts";
 
 const root = resolve(import.meta.dir, "..");
 const port = Number(process.env.DASHBOARD_PORT ?? 8790);
@@ -21,10 +21,12 @@ try {
 const origins = [
   `http://127.0.0.1:${port}`,
   `http://localhost:${port}`,
+  ...(process.env.DASHBOARD_ORIGIN ? [parseDashboardOrigin(process.env.DASHBOARD_ORIGIN)] : []),
   ...(process.env.NODE_ENV === "development"
     ? ["http://127.0.0.1:8791", "http://localhost:8791"]
     : []),
 ];
+const hosts = new Set(origins.map((origin) => new URL(origin).host));
 const proxy = createReadOnlyProxy({
   upstream: process.env.MACQUEUE_URL ?? "http://100.102.112.115:8787",
   token,
@@ -42,7 +44,13 @@ const server = Bun.serve({
   idleTimeout: 120,
   async fetch(request) {
     const url = new URL(request.url);
-    if (!origins.includes(url.origin)) return jsonError("LOCAL HOST REQUIRED", 403);
+    // Serve terminates TLS and preserves Host on its HTTP connection to loopback.
+    // Keep exact host/origin checks; do not trust arbitrary forwarded headers.
+    if (
+      !hosts.has(url.host) ||
+      (request.headers.get("host") && !hosts.has(request.headers.get("host")!))
+    )
+      return jsonError("LOCAL HOST REQUIRED", 403);
     if (url.pathname.startsWith("/api/")) return proxy(request);
     if (request.method !== "GET") return jsonError("READ ONLY", 405);
     const path = url.pathname === "/" ? "index.html" : url.pathname.slice(1);

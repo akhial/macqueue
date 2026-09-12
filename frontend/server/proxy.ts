@@ -5,6 +5,21 @@ export interface ProxyOptions {
   fetcher?: typeof fetch;
 }
 
+export function parseDashboardOrigin(value: string): string {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("DASHBOARD_ORIGIN must be an HTTPS origin without a path");
+  }
+  return url.origin;
+}
+
 export function jsonError(message: string, status: number) {
   return Response.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
 }
