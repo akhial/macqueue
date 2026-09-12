@@ -2,7 +2,12 @@
 
 A small pull-based job queue for an Apple Silicon Mac and a Linux VPS. Python 3.11+; no runtime packages, broker, or database server to install.
 
-The VPS stores jobs in SQLite. The Mac long-polls the VPS, creates disposable Git checkouts, runs locally approved operations, and uploads logs, results, and artifacts. The Mac opens no listening port. Agents receive a submitter token; only the Mac receives a worker token.
+The VPS stores jobs in SQLite. The Mac long-polls the VPS, creates disposable Git checkouts, runs locally approved operations, and uploads logs, results, and artifacts. The Mac worker opens no listening port. Agents receive a submitter token; only the Mac receives a worker token.
+
+The optional [local dashboard](frontend/README.md) runs separately on the Mac's
+loopback interface. It tracks the latest 100 jobs, details, logs and artifacts
+through a read-only Bun gateway. From `frontend/`, run `pnpm build` then
+`pnpm start`; open `http://127.0.0.1:8790`. It uses Vite+, pnpm and Bun.
 
 Included:
 

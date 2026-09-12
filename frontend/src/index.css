@@ -1,0 +1,76 @@
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "@fontsource/jetbrains-mono/latin-500.css";
+@import "@fontsource/jetbrains-mono/latin-600.css";
+@import "@fontsource/jetbrains-mono/latin-700.css";
+:root {
+  font-family: "JetBrains Mono", monospace;
+  color: #111;
+  background: #fff;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  font-weight: 400;
+  font-size: 12px;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 360px;
+}
+button,
+input {
+  font: inherit;
+}
+button {
+  border: 1px solid #111;
+  background: white;
+  color: #111;
+  cursor: pointer;
+  border-radius: 0;
+}
+button:disabled {
+  cursor: not-allowed;
+  color: #777;
+  border-color: #aaa;
+}
+button:not(:disabled):hover {
+  background: #111;
+  color: white;
+}
+button:focus-visible,
+input:focus-visible,
+pre:focus-visible,
+a:focus-visible {
+  outline: 2px solid #111;
+  outline-offset: 3px;
+}
+input {
+  border-radius: 0;
+  color: #111;
+  background: #fff;
+}
+a {
+  color: inherit;
+}
+::selection {
+  background: #111;
+  color: #fff;
+}
+pre,
+code,
+kbd {
+  font-family: inherit;
+}
+pre {
+  margin: 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
