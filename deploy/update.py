@@ -158,8 +158,8 @@ class Update:
             info = target.stat() if before is not None else None
             receipt['files'][name] = {'before': before, 'after': digest(payloads[name]) if name in payloads else before,
                                      'uid': info.st_uid if info else 0,
-                                     'gid': info.st_gid if info else self.installation['gid'],
-                                     'mode': stat.S_IMODE(info.st_mode) if info else 0o640}
+                                     'gid': info.st_gid if info else (self.installation['gid'] if self.mac else 0),
+                                     'mode': stat.S_IMODE(info.st_mode) if info else (0o640 if self.mac else 0o644)}
             if before is not None:
                 old = backup / 'before' / name
                 old.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

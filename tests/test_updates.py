@@ -54,6 +54,21 @@ class UpdateTests(unittest.TestCase):
             self.updater.rollback(receipt)
         self.assertEqual(b'x = 3\n', target.read_bytes())
 
+    def test_new_debian_module_is_readable_by_the_unprivileged_agent(self):
+        (self.updater.app / 'macqueue').mkdir()
+        stage = self.root / 'new-module-stage'
+        (stage / 'files/macqueue').mkdir(parents=True)
+        source = stage / 'files/macqueue/sources.py'
+        source.write_text('pass\n')
+        (stage / 'plan.json').write_text(json.dumps({'platform': 'debian', 'files': {
+            'macqueue/sources.py': {'before': None, 'after': update.current(source)}}}))
+        self.updater.apply(stage)
+        target = self.updater.app / 'macqueue/sources.py'
+        self.assertEqual(0o644, target.stat().st_mode & 0o777)
+        receipt = next((self.updater.base / 'updates').glob('*/receipt.json'))
+        self.updater.rollback(receipt)
+        self.assertFalse(target.exists())
+
     def test_interrupted_apply_can_restore_mixed_state(self):
         target, receipt = self.install()
         value = json.loads(receipt.read_text())

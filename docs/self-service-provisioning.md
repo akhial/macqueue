@@ -17,6 +17,8 @@ macqueue submit correctness.json
 
 Routine revisions and crates.io dependency changes need no worker-config edits, `candidate-request.json`, worker credential transfer, or macOS `sudo`. Worker, toolchain and permission changes remain operator tasks.
 
+The prepared one-time enablement command installs the worker update, proves source import and an offline build as the hidden service account, then publishes `.state/selfserve-status.json` on the VPS automatically. It also submits a confirmation through the agent's unprivileged CLI. The agent can inspect that job directly; no relay through another assistant is required.
+
 ## Status and retries
 
 The command prints its job ID after submission and waits by default. Use `--no-wait` to return immediately, then use ordinary `get`, `wait`, `logs`, `download`, or `cancel` commands. Interrupting the waiting CLI does not cancel an already submitted job. Queue cancellation/expiry rules apply; an offline Mac can pick up queued work when it returns.
